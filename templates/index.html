@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Anyworld</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=16">
+  <link rel="icon" type="image/png" href="/static/favicon/favicon-96x96.png" sizes="96x96" />
+  <link rel="icon" type="image/svg+xml" href="/static/favicon/favicon.svg" />
+  <link rel="shortcut icon" href="/static/favicon/favicon.ico" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png" />
+  <link rel="manifest" href="/static/favicon/site.webmanifest" />
+</head>
+
+<body>
+  <main id="grid-container" hidden>
+    <section id="chat-pane" aria-label="Players and party chat">
+      <div id="player-roster" aria-label="Current players">
+        <h2>Players</h2>
+        <ul id="player-list"></ul>
+      </div>
+      <div id="chat-messages" aria-label="Party chat" aria-live="polite"></div>
+      <form id="chat-form">
+        <input id="chat-input" maxlength="10000" autocomplete="off" placeholder="Chat with the party..."
+          aria-label="Chat message">
+      </form>
+    </section>
+    <header id="title-pane">
+      <span id="scenario-title">Awaiting scenario initialization...</span>
+      <details id="token-usage" hidden>
+        <summary aria-label="Show token accounting"><span id="token-chart" role="img"
+          aria-label="Estimated retained context"></span><span id="token-count"></span></summary>
+        <div id="token-details"></div>
+      </details>
+      <span id="player-identity" aria-label="Current player"></span>
+    </header>
+    <section id="log-pane" data-pane-title="Game State" aria-label="Game state: scenario state and player actions"
+      aria-live="polite">
+      <img id="game-banner" src="/static/media/AnyworldBanner.jpg" alt="Anyworld"
+        width="1376" height="322" fetchpriority="high">
+    </section>
+    <form id="input-pane">
+      <div id="skip-vote-box" hidden>
+        <span id="skip-vote-status" aria-live="polite"></span>
+        <button type="button" id="skip-vote-button">Vote to skip</button>
+      </div>
+      <input type="text" id="action-input" maxlength="50000" disabled autocomplete="off"
+        placeholder="Waiting for your turn..." aria-label="Your character action">
+    </form>
+  </main>
+
+  <div id="login-modal" class="modal" role="dialog" aria-modal="true">
+    <form id="login-form" class="modal-card">
+      <h1>Anyworld</h1>
+      <p>Create a room as host, or join a friend's room with an invite code.</p>
+      <div class="mode-toggle" role="tablist" aria-label="Room mode">
+        <button type="button" id="mode-create" class="mode-button" role="tab">Create room</button>
+        <button type="button" id="mode-join" class="mode-button active" role="tab">Join room</button>
+      </div>
+      <label for="name-input">Player name</label>
+      <input id="name-input" maxlength="40" required autocomplete="nickname">
+      <label for="invite-input" id="invite-label">Invite code</label>
+      <input id="invite-input" maxlength="16" autocomplete="off" placeholder="ABC-123">
+      <label for="password-input" id="password-label" hidden>Admin password (if required)</label>
+      <input id="password-input" type="password" maxlength="200" autocomplete="current-password" hidden>
+      <button type="submit" id="login-submit">Enter</button>
+      <p id="login-error" class="error" role="alert"></p>
+      <div id="join-step" hidden>
+        <p>Choose your character:</p>
+        <div id="join-character-list"></div>
+        <p id="join-status" class="error" role="alert"></p>
+      </div>
+    </form>
+  </div>
+
+  <div id="host-modal" class="modal" role="dialog" aria-modal="true" hidden>
+    <div class="modal-card">
+      <section id="scenario-step">
+        <h2>Create the scenario</h2>
+        <form id="scenario-form">
+          <label id="cast-label">Characters — create the cast, then pick the one you play:</label>
+          <div id="character-editor"></div>
+          <button type="button" id="add-character">+ Add character</button>
+          <label for="scenario-input">Describe the setting, characters, and opening situation</label>
+          <textarea id="scenario-input" maxlength="500000" required></textarea>
+          <label for="guidance-input">Additional DM guidance (optional)</label>
+          <textarea id="guidance-input" maxlength="500000"
+            placeholder="Example: Include a small possibility of something extremely random happening whenever players act."></textarea>
+          <button type="submit">Generate scenario</button>
+        </form>
+      </section>
+      <section id="lobby-step" hidden>
+        <h2>Scenario ready</h2>
+        <p>Share the invite code so players can join. Start when everyone is ready.</p>
+        <div id="invite-box">
+          <span>Invite code:</span>
+          <strong id="invite-code">------</strong>
+          <button type="button" id="copy-invite">Copy</button>
+        </div>
+        <div id="lobby-roster" aria-label="Players in the lobby">
+          <p id="lobby-player-count" role="status"></p>
+          <ul id="lobby-player-list"></ul>
+        </div>
+        <button id="start-button" type="button">Start game</button>
+      </section>
+      <p id="host-status" role="status"></p>
+      <button id="close-room-button" type="button">Close room</button>
+    </div>
+  </div>
+
+  <div id="dm-thinking" hidden role="status">
+    <span class="thinking-orb" aria-hidden="true"></span>
+    The Dungeon Master is weaving the outcome…
+  </div>
+  <button id="end-game-button" type="button" hidden>End game</button>
+  <button id="retry-round-button" type="button" hidden>Retry paused round</button>
+  <div id="connection-status" role="status">Connecting...</div>
+  <script src="/static/js/app.js?v=rooms-1"></script>
+</body>
+
+</html>
