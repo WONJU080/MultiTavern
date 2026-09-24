@@ -1,5 +1,7 @@
 # MultiTavern（多人酒馆）
 
+系自娱自乐系列第四弹，非常好玩，尤其适合和同学玩。
+
 基于 [AnyWorld](https://github.com/iamarxs/AnyWorld) 的多人 AI 跑团游戏：房主创建房间和角色池，朋友凭邀请码加入并认领角色，AI 作为主持人推进剧情。
 
 ## 玩法
