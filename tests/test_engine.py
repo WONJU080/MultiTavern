@@ -44,31 +44,56 @@ class FakeResolver:
         self.rounds = 0
         self.start_names = []
 
-    def set_genesis(self, scenario: str, guidance: str = "") -> None:
+    def set_genesis(
+        self, scenario: str, guidance: str = "", time_context: str | None = None
+    ) -> None:
         """Record the scenario."""
         self.scenario = scenario
+        self.time_context = time_context
+
+    def set_lorebook(self, entries) -> None:
+        """Record the world-book entries."""
+        self.lorebook = list(entries)
+
+    def set_cast(self, cast) -> None:
+        """Record the cast cards."""
+        self.cast_cards = list(cast)
+
+    def set_prompt_blocks(self, blocks) -> None:
+        """Record the instruction blocks."""
+        self.prompt_blocks = list(blocks)
+
+    def set_sampling(self, config) -> None:
+        """Record the sampling overrides."""
+        self.sampling = config
 
     async def generate_scenario_title(self) -> str:
         """Return only a fixed title."""
         return "The Test Quest"
 
-    async def generate_start_state(self, cast, claims):
+    async def generate_start_state(self, cast, claims, current_time: str = ""):
         """Return a fixed start state for the cast."""
         self.start_names.append([char.name for char in cast])
+        self.start_time = current_time
         return RoundResolution(
             global_narrative=f"{', '.join(char.name for char in cast)} stand at a gate.",
             player_resolutions={},
         )
 
-    async def generate_resolution(self, round_buffer: dict[str, str]) -> RoundResolution:
+    async def generate_resolution(
+        self, round_buffer: dict[str, str], current_time: str = "", event_context: str = ""
+    ) -> RoundResolution:
         """Return a fixed resolution for the given actions."""
         self.rounds += 1
+        self.resolution_time = current_time
+        self.event_context = event_context
         return RoundResolution(
             round_title=f"Round {self.rounds}",
             global_narrative=f"State after round {self.rounds}.",
             player_resolutions={
                 name: f"Resolved: {action}" for name, action in round_buffer.items()
             },
+            time_elapsed_minutes=30,
         )
 
 
@@ -217,7 +242,9 @@ def test_repeated_action_is_annotated_for_definitive_resolution(tmp_path: Path) 
         engine, _, resolver = await build_started_game(tmp_path)
         captured = {}
 
-        async def resolve(round_buffer, dice_results=None, hidden_rolls=None):
+        async def resolve(
+            round_buffer, dice_results=None, hidden_rolls=None, current_time="", event_context=""
+        ):
             captured["round"] = dict(round_buffer)
             return RoundResolution(
                 global_narrative="State after.",
@@ -305,7 +332,7 @@ def test_round_without_checks_never_rolls_and_emits_clean_outcomes(tmp_path, mon
         async def plan_dice(actions, current_state):
             return DicePlan(rolls={name: False for name in actions}, hidden_rolls=[])
 
-        async def resolve(actions, dice, hidden_rolls):
+        async def resolve(actions, dice, hidden_rolls, current_time="", event_context=""):
             assert dice == {}
             assert hidden_rolls == set()
             return RoundResolution(

@@ -3,23 +3,28 @@
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
 import secrets
 from dataclasses import dataclass
-from time import monotonic
+from pathlib import Path
+from time import time
 from typing import Any, Callable
 
 from api.connections import ConnectionManager
 from core.config import settings
 from core.schemas import ServerEvent
-from logic.engine import GameEngine
+from logic.engine import GameEngine, restore_engine
 from logic.models import GameState
+from logic.round_history import RoundHistoryStore
 
 LOGGER = logging.getLogger(__name__)
 
 # Unambiguous uppercase alphabet: no I, L, O, 0 or 1.
 CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 CODE_GROUPS = (3, 3)
+
+ROOMS_DIR = Path(".rooms")
 
 _PRE_GAME_STATES = frozenset(
     {
@@ -109,8 +114,8 @@ class RoomRegistry:
             code=code,
             engine=engine,
             connections=connections,
-            created_at=monotonic(),
-            last_active=monotonic(),
+            created_at=time(),
+            last_active=time(),
         )
         engine.room_code = format_invite_code(code)
         registry = self
@@ -133,18 +138,77 @@ class RoomRegistry:
 
     def touch(self, room: Room) -> None:
         """Refresh a room's activity stamp."""
-        room.last_active = monotonic()
+        room.last_active = time()
 
     def discard(self, code: str) -> None:
         """Drop a never-joined room without socket work."""
         if self.rooms.pop(code, None) is not None:
+            self._delete_room_file(code)
             LOGGER.info("Room discarded code=%s", code)
+
+    def _room_path(self, code: str) -> Path:
+        return ROOMS_DIR / f"{code}.json"
+
+    def save_room(self, room: Room) -> None:
+        """Persist a room's state to disk atomically."""
+        try:
+            ROOMS_DIR.mkdir(parents=True, exist_ok=True)
+            data = {"code": room.code, **room.engine.to_persistent_dict()}
+            tmp = self._room_path(room.code).with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(self._room_path(room.code))
+        except OSError as exc:
+            LOGGER.warning("Could not save room %s: %s", room.code, exc)
+
+    def save_all(self) -> None:
+        """Persist every live room."""
+        for room in self.rooms.values():
+            self.save_room(room)
+
+    def _delete_room_file(self, code: str) -> None:
+        try:
+            self._room_path(code).unlink(missing_ok=True)
+            RoundHistoryStore.delete(code)
+        except OSError:
+            pass
+
+    def restore_rooms(self) -> None:
+        """Rebuild every persisted room from disk."""
+        if not ROOMS_DIR.exists():
+            return
+        for path in ROOMS_DIR.glob("*.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                code = data["code"]
+                if code in self.rooms:
+                    continue
+                connections = ConnectionManager()
+                engine = restore_engine(data, connections, self._resolver_factory)
+                engine.room_code = format_invite_code(code)
+                room = Room(
+                    code=code,
+                    engine=engine,
+                    connections=connections,
+                    created_at=time(),
+                    last_active=time(),
+                )
+                registry = self
+
+                async def on_ended(reason: str) -> None:
+                    await registry.remove_room(code, reason, notify=True)
+
+                engine.on_ended = on_ended
+                self.rooms[code] = room
+                LOGGER.info("Room restored code=%s state=%s", code, engine.state.name)
+            except Exception as exc:  # noqa: BLE001 - a corrupt file must not block startup
+                LOGGER.warning("Could not restore room %s: %s", path.name, exc)
 
     async def remove_room(self, code: str, reason: str, *, notify: bool) -> None:
         """Close a room: notify members and close its sockets."""
         room = self.rooms.pop(code, None)
         if room is None:
             return
+        self._delete_room_file(code)
         room.engine.on_ended = None
         if notify:
             await room.connections.broadcast_global(
@@ -163,10 +227,10 @@ class RoomRegistry:
             self._sweep_task = asyncio.create_task(self._sweep_loop())
 
     async def _sweep_loop(self) -> None:
-        """Periodically remove ended, empty and abandoned rooms."""
+        """Periodically remove ended, empty and abandoned rooms, and persist."""
         while not self._closed:
             await asyncio.sleep(settings.server.sweep_interval_seconds)
-            now = monotonic()
+            now = time()
             for code, room in list(self.rooms.items()):
                 if room.engine.state is GameState.ENDED:
                     await self.remove_room(code, "The room was closed.", notify=True)
@@ -186,16 +250,18 @@ class RoomRegistry:
                     continue
                 if now - room.last_active >= timeout:
                     await self.shutdown_room(room, reason)
+            self.save_all()
 
     async def close_all(self) -> None:
-        """Stop the sweep and shut down every remaining room."""
+        """Stop the sweep, persist every room and close its connections."""
         self._closed = True
         task = self._sweep_task
         if task is not None and task is not asyncio.current_task():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         for code, room in list(self.rooms.items()):
+            self.save_room(room)
             room.engine.on_ended = None
-            await room.engine.shutdown(reason="The server is shutting down.", notify=False)
+            await room.engine.suspend()
             await room.connections.close()
             self.rooms.pop(code, None)

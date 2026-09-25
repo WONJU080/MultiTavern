@@ -43,6 +43,24 @@ class LLMResolutionError(RuntimeError):
     """Raised when the LLM cannot produce valid structured output."""
 
 
+def card_text(char: Any) -> str:
+    """Render one cast member's card for the start-state prompt."""
+    parts = []
+    description = getattr(char, "description", "")
+    personality = getattr(char, "personality", "")
+    style = getattr(char, "style", "")
+    example = getattr(char, "example_dialogue", "")
+    if description:
+        parts.append(description)
+    if personality:
+        parts.append(f"性格: {personality}")
+    if style:
+        parts.append(f"语言风格: {style}")
+    if example:
+        parts.append(f"示例台词: {example}")
+    return f"{getattr(char, 'name', '')}: " + ("; ".join(parts) if parts else "无补充设定")
+
+
 class LLMBackendUnavailableError(LLMResolutionError):
     """The provider connection failed before a usable model response arrived."""
 
@@ -128,6 +146,10 @@ class LLMContextManager:
         self.history: list[dict[str, str]] = []
         self.memory: dict[str, str] | None = None
         self.private_guidance = ""
+        self.lorebook: list[Any] = []
+        self.prompt_blocks: list[Any] = []
+        self.sampling_options: dict[str, float] = {}
+        self.cast_state: dict[str, str] | None = None
         self._known_player_names: list[str] = []
         self.last_token_usage = self.system_prompt_tokens + 3
         self.game_usage = UsageTotals()
@@ -156,14 +178,22 @@ class LLMContextManager:
             )
         return AsyncOpenAI(**client_options)
 
-    def set_genesis(self, scenario: str, guidance: str = "") -> None:
-        """Set a new initial scenario and optional host guidance, then clear history."""
+    def set_genesis(
+        self,
+        scenario: str,
+        guidance: str = "",
+        time_context: str | None = None,
+    ) -> None:
+        """Set a new initial scenario, optional host guidance, then clear history."""
         logger.info(
-            "Setting genesis context (guidance=%s, scenario_chars=%d)",
+            "Setting genesis context (guidance=%s, scenario_chars=%d, time_rules=%s)",
             bool(guidance),
             len(scenario),
+            bool(time_context),
         )
         content = f"Initial Scenario:\n{scenario}"
+        if time_context:
+            content += "\n\n" + time_context
         if guidance:
             content += (
                 "\n\nAdditional DM Guidance:\n"
@@ -189,8 +219,101 @@ class LLMContextManager:
         self.round_usage_by_kind = {}
         self.round_work_seconds = 0.0
         self.round_failures = 0
-        self.last_round_error: str | None = None
+        self.last_round_error = None
         self._round_started = None
+
+    def set_cast(self, cast: list[Any]) -> None:
+        """Replace the cast character cards in the fixed context."""
+        lines = ["Cast of characters (their cards stay in force throughout the story):"]
+        for char in cast:
+            lines.append("- " + card_text(char))
+        self.cast_state = {"role": "user", "content": "\n".join(lines)} if len(lines) > 1 else None
+
+    def set_lorebook(self, entries: list[Any]) -> None:
+        """Replace the world-book entries used for keyword-triggered insertion."""
+        self.lorebook = list(entries)
+
+    def set_prompt_blocks(self, blocks: list[Any]) -> None:
+        """Replace the ordered instruction blocks injected at fixed positions."""
+        self.prompt_blocks = list(blocks)
+
+    def set_sampling(self, config: Any) -> None:
+        """Replace the per-room sampling overrides with supported fields only."""
+        options: dict[str, float] = {}
+        temperature = getattr(config, "temperature", None)
+        top_p = getattr(config, "top_p", None)
+        if isinstance(temperature, (int, float)) and not isinstance(temperature, bool):
+            options["temperature"] = float(temperature)
+        if isinstance(top_p, (int, float)) and not isinstance(top_p, bool):
+            options["top_p"] = float(top_p)
+        self.sampling_options = options
+
+    def _enabled_blocks(self, position: str) -> list[Any]:
+        """Return enabled instruction blocks for a prompt position, in order."""
+        return [
+            block for block in self.prompt_blocks if block.enabled and block.position == position
+        ]
+
+    def _lorebook_block(self, scan_text: str) -> str:
+        """Return budgeted world-book content triggered by recent context.
+
+        Entry keys are matched case-insensitively against the tail of the
+        conversation and the current request (never against the fixed genesis,
+        which would keep every entry alive permanently). Matched entries get
+        one recursive pass over their own content, then are sorted with
+        constant entries first and higher insertion orders last, and capped by
+        the configured token budget.
+        """
+        depth = settings.llm.lorebook_scan_depth
+        recent = " ".join(
+            message.get("content", "") for message in self.history[-depth:] if message
+        )
+        haystack = f"{recent}\n{scan_text}".casefold()
+        matched: list[Any] = []
+        for entry in self.lorebook:
+            if not entry.enabled:
+                continue
+            if entry.constant or any(key.casefold() in haystack for key in entry.keys):
+                matched.append(entry)
+        if matched:
+            contents = " ".join(entry.content for entry in matched).casefold()
+            matched_ids = {id(entry) for entry in matched}
+            for entry in self.lorebook:
+                if not entry.enabled or id(entry) in matched_ids:
+                    continue
+                if entry.constant or any(key.casefold() in contents for key in entry.keys):
+                    matched.append(entry)
+        matched.sort(key=lambda entry: (not entry.constant, -entry.order))
+        chosen: list[Any] = []
+        used = 0
+        budget = settings.llm.lorebook_max_tokens
+        for entry in matched:
+            cost = self._count_tokens(entry.content) + len(entry.keys)
+            if used + cost > budget:
+                logger.info(
+                    "Lorebook budget exhausted used=%d dropped=%d",
+                    used,
+                    len(matched) - len(chosen),
+                )
+                break
+            chosen.append(entry)
+            used += cost
+        if not chosen:
+            return ""
+        blocks = "\n\n".join(
+            f"[{entry.title}]\n{entry.content}" if entry.title else entry.content
+            for entry in chosen
+        )
+        logger.info(
+            "Lorebook inserted entries=%d tokens=%d scanned=%d",
+            len(chosen),
+            used,
+            len(self.history[-depth:]),
+        )
+        return (
+            "\n\nWorld lore (apply these facts to the scene silently; never present them "
+            "as quoted lore):\n" + blocks
+        )
 
     async def generate_scenario_title(self) -> str:
         """Generate only a title, without creating or remembering narrative."""
@@ -214,25 +337,30 @@ class LLMContextManager:
         return result.title.strip()
 
     async def generate_start_state(
-        self, cast: list[Character], claims: dict[str, str]
+        self, cast: list[Character], claims: dict[str, str], current_time: str = ""
     ) -> RoundResolution:
         """Introduce the cast and its player-controlled characters when play begins."""
         logger.info("Generating start state for %d characters", len(cast))
         self._known_player_names = list(
             dict.fromkeys([*self._known_player_names, *[char.name for char in cast]])
         )
-        cast_lines = "\n".join(
-            f"{char.name}: {char.description}" if char.description else char.name for char in cast
-        )
+        cast_lines = "\n".join(card_text(char) for char in cast)
         claimed_lines = (
             ", ".join(f"{name} (controlled by {human})" for name, human in claims.items())
             or "none yet"
         )
         unclaimed = [char.name for char in cast if char.name not in claims]
+        time_line = (
+            f"\n\nAuthoritative in-game time at game start: {current_time}. "
+            "The story opens at exactly this time; reflect the time of day in the opening "
+            "narrative and never invent a different clock."
+            if current_time
+            else ""
+        )
         prompt = {
             "role": "user",
             "content": (
-                "The game is now starting. The cast of characters is:\n"
+                "The game is now starting." + time_line + " The cast of characters is:\n"
                 f"{cast_lines}\n\n"
                 f"Player-controlled characters: {claimed_lines}.\n"
                 f"Unclaimed characters ({', '.join(unclaimed) if unclaimed else 'none'}) "
@@ -319,17 +447,34 @@ class LLMContextManager:
         round_buffer: dict[str, str],
         dice_results: dict[str, int] | None = None,
         hidden_rolls: set[str] | None = None,
+        current_time: str = "",
+        event_context: str = "",
     ) -> RoundResolution:
         """Resolve a round of actions into a coherent narrative outcome."""
         logger.info(
-            "Generating resolution for %d actions (dice_results=%d)",
+            "Generating resolution for %d actions (dice_results=%d, time=%s)",
             len(round_buffer),
             len(dice_results or {}),
+            bool(current_time),
         )
         self._known_player_names = list(dict.fromkeys([*self._known_player_names, *round_buffer]))
         actions = "\n".join(
             f"{name} attempts to: {action}" for name, action in round_buffer.items()
         )
+        time_context = ""
+        if current_time:
+            time_context = (
+                f"\n\nAuthoritative current time: {current_time}. Use this exact time as the "
+                "round's starting point; never invent a different clock or restate an earlier "
+                "time. Estimate the total in-world minutes this round's actions take and "
+                "report it as an integer in time_elapsed_minutes. Parallel actions in "
+                "different locations count only the longest single line, not the sum. Use the "
+                "reference durations from the configured time rules when they fit; resting "
+                "or sleeping can take hours. Begin the global_narrative with the current time "
+                "label and the end-of-round time it produces, e.g. '当前时间：Day 1 06:30, "
+                "耗时约40分钟, 当前时间：Day 1 07:10', computed as the authoritative start "
+                "time plus time_elapsed_minutes.\n\n"
+            )
         roll_context = ""
         if dice_results:
             rendered = ", ".join(
@@ -350,7 +495,9 @@ class LLMContextManager:
         prompt = {
             "role": "user",
             "content": (
-                "Resolve the simultaneous actions together, respecting established facts "
+                time_context
+                + (event_context + "\n\n" if event_context else "")
+                + "Resolve the simultaneous actions together, respecting established facts "
                 "and each target's choices. Give every action a definitive outcome this "
                 "round: success, failure with concrete consequences, or a stated in-world "
                 "reason it cannot succeed. Never leave an attempt hanging or restate an "
@@ -396,11 +543,30 @@ class LLMContextManager:
         system = self.system_prompt
         if kind == "dice" and settings.llm.planner_system_prompt:
             system = {"role": "system", "content": settings.llm.planner_system_prompt}
-        return [
-            system,
-            *([self.genesis_state] if self.genesis_state else []),
-            *([self.memory] if self.memory else []),
-        ]
+        system_blocks = self._enabled_blocks("system")
+        scenario_blocks = self._enabled_blocks("scenario")
+        messages: list[dict[str, str]] = [system]
+        if system_blocks:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": "\n\n".join(block.content for block in system_blocks),
+                }
+            )
+        if self.genesis_state:
+            messages.append(self.genesis_state)
+        if self.cast_state:
+            messages.append(self.cast_state)
+        if scenario_blocks:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": "\n\n".join(block.content for block in scenario_blocks),
+                }
+            )
+        if self.memory:
+            messages.append(self.memory)
+        return messages
 
     def _output_limit(self, kind: str) -> int:
         """Return the configured output token cap for a request kind."""
@@ -557,24 +723,44 @@ class LLMContextManager:
                 **prompt,
                 "content": prompt["content"]
                 + (
-                    "\nWrite concise, natural prose in the language of the scenario. "
+                    "\nWrite natural prose in the language of the scenario. "
+                    "When the host has supplied explicit style instructions (prompt blocks), "
+                    "follow those exactly and let them override the defaults below. "
                     "For an English scenario, use complete English sentences with a subject "
                     "and verb. Describe what "
                     "happened, not just the attempted action. Each player's outcome must stand "
                     "alone, without continuing another field's sentence. Use plain text without "
                     "markup or name labels. Separate longer global narratives and individual "
-                    "player outcomes into short, coherent paragraphs using blank lines "
+                    "player outcomes into coherent paragraphs using blank lines "
                     "(two newline characters). Start a new paragraph when the focus, scene, "
-                    "or consequence changes. Keep short descriptions in one paragraph; do not "
+                    "or consequence changes. Unless host style instructions say otherwise, "
+                    "keep short descriptions in one paragraph; do not "
                     "pad the prose or put every sentence on a separate line. "
                     "Translate disconnect/return annotations into "
                     "in-world absence or return, keeping technical status out of the story."
                 ),
             }
+        request_prompt = prompt
+        if kind in {"round", "dice", "initial"} and self.lorebook:
+            block = self._lorebook_block(prompt["content"])
+            if block:
+                request_prompt = {**prompt, "content": prompt["content"] + block}
+        output_blocks = self._enabled_blocks("output") if kind in {"round", "initial"} else []
+        if output_blocks:
+            request_prompt = {
+                **request_prompt,
+                "content": request_prompt["content"]
+                + "\n\n"
+                + "\n\n".join(block.content for block in output_blocks),
+            }
         await self.discover_context_window()
         if include_history:
-            await self._compact_if_needed(prompt, schema, kind)
-        messages = [*self._fixed_messages(kind), *(self.history if include_history else []), prompt]
+            await self._compact_if_needed(request_prompt, schema, kind)
+        messages = [
+            *self._fixed_messages(kind),
+            *(self.history if include_history else []),
+            request_prompt,
+        ]
         for repair in range(settings.llm.max_retries + 1):
             try:
                 result = await self._parse(messages, schema, kind, repair_attempt=repair)
@@ -587,14 +773,29 @@ class LLMContextManager:
                     self._check_public_output(public_title, {})
                 if isinstance(result, RoundResolution):
                     self._check_public_output(result, private_rolls or {})
-                    if opening_names is not None and any(
-                        name.casefold() not in result.global_narrative.casefold()
-                        for name in opening_names
-                    ):
-                        raise LLMResolutionError(
-                            "Opening narrative must introduce every player by their supplied "
-                            "name with an occupation, class, or role: " + json.dumps(opening_names)
-                        )
+                    if opening_names is not None:
+                        missing = [
+                            name
+                            for name in opening_names
+                            if name.casefold() not in result.global_narrative.casefold()
+                        ]
+                        if missing:
+                            if repair == settings.llm.max_retries:
+                                # Deterministic fallback: never fail the start over names.
+                                result = result.model_copy(
+                                    update={
+                                        "global_narrative": result.global_narrative
+                                        + "\n\nAlso present in the story: "
+                                        + ", ".join(missing)
+                                        + "."
+                                    }
+                                )
+                            else:
+                                raise LLMResolutionError(
+                                    "Opening narrative must introduce every player by their "
+                                    "supplied name with an occupation, class, or role. MISSING "
+                                    "from the narrative: " + json.dumps(missing)
+                                )
                 break
             except LLMResolutionError as exc:
                 logger.warning(
@@ -716,7 +917,9 @@ class LLMContextManager:
             [result.round_title or "", result.global_narrative, *result.player_resolutions.values()]
         )
         normalized = " ".join(text.casefold().split())
-        fragments = re.split(r"[.!?\n]+", self.private_guidance)
+        backstage = [self.private_guidance]
+        backstage.extend(block.content for block in self.prompt_blocks)
+        fragments = [fragment for source in backstage for fragment in re.split(r"[.!?\n]+", source)]
         if any(
             len(fragment.strip()) >= 16 and " ".join(fragment.casefold().split()) in normalized
             for fragment in fragments
@@ -854,6 +1057,7 @@ class LLMContextManager:
                             else {}
                         ),
                         **{cap_key: self._output_limit(kind)},
+                        **self.sampling_options,
                     )
                     choice = response.choices[0]
                     if getattr(choice, "finish_reason", None) == "length":
@@ -878,6 +1082,7 @@ class LLMContextManager:
                         messages=[*messages[:-1], last],
                         response_format={"type": "json_object"},
                         **{cap_key: self._output_limit(kind)},
+                        **self.sampling_options,
                     )
                     choice = response.choices[0]
                     if getattr(choice, "finish_reason", None) == "length":
@@ -1301,3 +1506,22 @@ class LLMContextManager:
         if self._http is not None:
             await self._http.aclose()
             self._http = None
+
+    def to_persistent_dict(self) -> dict[str, Any]:
+        """Serialize the conversation context for room persistence."""
+        return {
+            "genesis_state": self.genesis_state,
+            "memory": self.memory,
+            "history": self.history,
+            "private_guidance": self.private_guidance,
+            "known_player_names": list(self._known_player_names),
+        }
+
+    def restore_from_persistent_dict(self, data: dict[str, Any]) -> None:
+        """Restore the conversation context from a persisted room."""
+        self.genesis_state = data.get("genesis_state")
+        self.memory = data.get("memory")
+        self.history = list(data.get("history") or [])
+        self.private_guidance = data.get("private_guidance") or ""
+        self._known_player_names = list(data.get("known_player_names") or [])
+        self._retained_measurement = None

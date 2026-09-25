@@ -7,12 +7,12 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
-from time import monotonic
+from time import time
 from urllib.parse import parse_qs
 from uuid import UUID
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
@@ -57,10 +57,11 @@ def _room_rows(registry: RoomRegistry) -> list[dict[str, str]]:
                 "title": engine.scenario_title or "—",
                 "players": ", ".join(humans) or "—",
                 "claimed": str(len(engine.claims)),
+                "has_record": engine.transcript.path is not None,
                 "created": (
-                    datetime.now() - timedelta(seconds=max(0.0, monotonic() - room.created_at))
+                    datetime.now() - timedelta(seconds=max(0.0, time() - room.created_at))
                 ).strftime("%H:%M:%S"),
-                "idle": f"{max(0, int(monotonic() - room.last_active))}s",
+                "idle": f"{max(0, int(time() - room.last_active))}s",
             }
         )
     return rows
@@ -76,6 +77,7 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
         registry = RoomRegistry(resolver_factory)
         application.state.manager = manager
         application.state.registry = registry
+        registry.restore_rooms()
         registry.start_sweep()
         try:
             yield
@@ -131,6 +133,25 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
             await registry.shutdown_room(room, "The room was closed by the server operator.")
         return RedirectResponse("/admin/rooms", status_code=303)
 
+    @application.get("/admin/rooms/{code}/record")
+    async def admin_room_record(code: str, request: Request):
+        """Serve a live room's story transcript to the authenticated operator."""
+        if not _admin_cookie_valid(request):
+            return RedirectResponse("/admin/rooms", status_code=303)
+        registry = request.app.state.registry
+        room = registry.rooms.get(code)
+        path = room.engine.transcript.path if room is not None else None
+        if path is None or not path.exists():
+            return HTMLResponse(
+                "<!doctype html><html lang='zh'><head><meta charset='utf-8'>"
+                "<title>Anyworld 运维面板</title></head>"
+                "<body style='background:#0b1212;color:#e0e9e5;"
+                "font-family:system-ui,sans-serif;padding:3rem;text-align:center'>"
+                "该房间还没有剧情记录（游戏尚未开始或房间已关闭）。</body></html>",
+                status_code=404,
+            )
+        return FileResponse(path, media_type="text/html")
+
     @application.websocket("/ws/{client_id}")
     async def websocket_endpoint(websocket: WebSocket, client_id: str) -> None:
         """Authenticate a client into a room and route its messages to that room."""
@@ -153,6 +174,7 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
         try:
             while True:
                 try:
+                    payload: ClientPayload | None = None
                     if not authenticated:
                         attempts += 1
                         async with asyncio.timeout_at(deadline):
@@ -232,6 +254,13 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
                     message = (
                         "Invalid message schema." if isinstance(exc, ValidationError) else str(exc)
                     )
+                    event_name = payload.event_type if payload is not None else "-"
+                    LOGGER.info(
+                        "Client message rejected client=%s event=%s reason=%s",
+                        client_id,
+                        event_name,
+                        message,
+                    )
                     await active_manager.send_socket(
                         websocket, ServerEvent(type="error", payload={"msg": message})
                     )
@@ -243,6 +272,10 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
         except (WebSocketDisconnect, RuntimeError):
             LOGGER.info("WebSocket disconnected")
         finally:
+            # Always release the socket from the gateway's pending set, even when
+            # authentication failed or an unexpected error escaped the loop; a
+            # leaked pending socket would otherwise count toward the admission cap.
+            await manager.disconnect(client_id, websocket)
             if room is not None:
                 # Hold the engine state lock across removal/marking to avoid a new
                 # authenticated replacement being marked disconnected by an older socket.
@@ -253,15 +286,25 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
                     else:
                         version = None
                 if removed:
-                    await room.engine.handle_disconnect(
-                        client_id,
-                        expected_version=version,
-                        still_disconnected=lambda: client_id
-                        not in room.connections.active_connections,
-                    )
+
+                    def still_disconnected() -> bool:
+                        return client_id not in room.connections.active_connections
+
+                    grace = settings.server.disconnect_grace_seconds
+                    if grace and grace > 0:
+                        room.engine.schedule_disconnect(
+                            client_id,
+                            expected_version=version,
+                            still_disconnected=still_disconnected,
+                            delay=grace,
+                        )
+                    else:
+                        await room.engine.handle_disconnect(
+                            client_id,
+                            expected_version=version,
+                            still_disconnected=still_disconnected,
+                        )
                     registry.touch(room)
-            else:
-                await manager.disconnect(client_id, websocket)
 
     return application
 

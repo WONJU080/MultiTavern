@@ -42,6 +42,8 @@ class LLMConfig(BaseModel):
     compaction_target_fraction: float = Field(default=0.75, ge=0.5, le=1.0)
     memory_budget_fraction: float = Field(default=0.4, ge=0.2, le=0.8)
     history_round_limit: int | None = Field(default=None, ge=2, le=100)
+    lorebook_scan_depth: int = Field(default=8, ge=0, le=100)
+    lorebook_max_tokens: int = Field(default=800, ge=64, le=16_384)
 
 
 class ServerConfig(BaseModel):
@@ -56,6 +58,7 @@ class ServerConfig(BaseModel):
     max_pending_connections: int = Field(default=32, ge=1, le=1_000)
     auth_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
     max_auth_attempts: int = Field(default=3, ge=1, le=10)
+    disconnect_grace_seconds: float = Field(default=120.0, ge=0, le=3_600)
     empty_room_timeout_seconds: float | None = Field(default=600.0, gt=0, le=86_400)
     abandoned_room_timeout_seconds: float | None = Field(default=3_600.0, gt=0, le=604_800)
     sweep_interval_seconds: float = Field(default=30.0, gt=0, le=3_600)

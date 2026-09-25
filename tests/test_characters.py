@@ -59,11 +59,12 @@ def test_parse_cast_validates_structure():
         parse_cast([{"name": ""}])
 
 
-def test_host_must_claim_one_of_the_cast(tmp_path):
-    """The host cannot create a scenario without claiming a character."""
+def test_host_claim_is_optional(tmp_path):
+    """The host may observe without claiming, but a bad claim is rejected."""
 
     async def run():
         engine, sender, _ = await build_engine(tmp_path)
+        # A claim that does not name a cast member is rejected.
         await engine.process_payload(
             "host",
             payload(
@@ -73,9 +74,31 @@ def test_host_must_claim_one_of_the_cast(tmp_path):
                 host_character="Stranger",
             ),
         )
-        assert "must claim one" in sender.events_of_type("error")[-1].payload["msg"]
+        assert "does not exist" in sender.events_of_type("error")[-1].payload["msg"]
         assert engine.state is GameState.SCENARIO_INJECTION
         assert not engine.cast
+        # An empty claim makes the host a pure observer.
+        await engine.process_payload(
+            "host",
+            payload(
+                "scenario_init",
+                scenario="A gate.",
+                characters=CAST_TWO,
+                host_character="",
+            ),
+        )
+        await engine.wait_for_inference()
+        assert engine.state is GameState.AWAITING_PLAYERS
+        assert engine.players["host"].character_name is None
+        assert engine.claims == {}
+        await engine.process_payload("host", payload("start_game"))
+        await engine.wait_for_inference()
+        assert engine.state is GameState.ACTIVE_TURN
+        assert engine.active_player_id is None
+        # A player joining now claims a character and becomes active.
+        await engine.player_join("p1", {"name": "One", "character": "Player"})
+        assert engine.active_player_id == "p1"
+        await engine.shutdown()
 
     asyncio.run(run())
 
@@ -92,7 +115,7 @@ def test_claiming_the_same_character_twice_is_rejected(tmp_path):
         with pytest.raises(ValueError, match="does not exist"):
             await engine.player_join("p2", {"name": "Two", "character": "Ghost"})
         await engine.player_join("p2", {"name": "Two", "character": "Free"})
-        assert engine.claims["Free"] == "p2"
+        assert engine.claims["Free"] == "Two"
 
     asyncio.run(run())
 
@@ -104,7 +127,7 @@ def test_start_state_receives_cast_and_claims(tmp_path):
         engine, sender, resolver = await build_engine(tmp_path)
         received = {}
 
-        async def start_state(cast, claims):
+        async def start_state(cast, claims, current_time=""):
             received["cast"] = [c.name for c in cast]
             received["claims"] = dict(claims)
             return RoundResolution(global_narrative="Everyone gathers.", player_resolutions={})
@@ -137,7 +160,7 @@ def test_mid_game_join_activates_in_the_next_round(tmp_path):
         await engine.wait_for_inference()
         assert engine.round_counter == 1
         assert "p1" in engine.players and not engine.pending_players
-        assert engine.claims["Free"] == "p1"
+        assert engine.claims["Free"] == "One"
         # Round 2 must include the new player with a handover note.
         await engine.process_payload("host", payload("action", action="Wait"))
         await engine.process_payload("p1", payload("action", action="Look around"))
@@ -191,7 +214,7 @@ def test_pending_joiner_disconnect_releases_the_claim(tmp_path):
         assert "p1" not in engine.pending_players
         # The character can now be claimed by someone else.
         await engine.player_join("p2", {"name": "Two", "character": "Free"})
-        assert engine.claims["Free"] == "p2"
+        assert engine.claims["Free"] == "Two"
         await engine.wait_for_inference()
         await engine.shutdown()
 
@@ -227,3 +250,134 @@ def test_room_info_lists_characters_and_claims():
                 assert by_name["Free"]["claimed_by"] is None
                 room = app.state.registry.rooms[normalize_invite_code(code)]
                 assert room is not None
+
+
+def test_player_can_join_as_a_spectator(tmp_path):
+    """A player may join without a character and watch without acting."""
+
+    async def run():
+        engine, sender, _ = await build_engine(tmp_path)
+        await set_scenario(engine, CAST_THREE, "Host")
+        await engine.player_join("p1", {"name": "One", "character": ""})
+        assert engine.players["p1"].character_name is None
+        assert engine.claims == {"Host": "Host"}
+        await engine.process_payload("host", payload("start_game"))
+        await engine.wait_for_inference()
+        assert engine.active_player_id == "host"
+        # The spectator can chat but never acts.
+        await engine.process_payload("p1", payload("chat", message="Watching"))
+        assert sender.events_of_type("chat_echo")[-1].payload["chat"] == "Watching"
+        assert engine.players["p1"].character_name is None
+        await engine.shutdown()
+
+    asyncio.run(run())
+
+
+def test_spectator_reconnects_without_a_character(tmp_path):
+    """A spectator can reconnect with an empty character claim."""
+
+    async def run():
+        engine, _, _ = await build_engine(tmp_path)
+        await set_scenario(engine, CAST_TWO, "Host")
+        await engine.player_join("p1", {"name": "One", "character": ""})
+        token = engine.players["p1"].reconnect_token
+        await engine.handle_disconnect("p1")
+        await engine.player_join("p1", {"name": "One", "character": "", "reconnect_token": token})
+        assert engine.players["p1"].character_name is None
+        assert engine.players["p1"].is_connected
+        await engine.shutdown()
+
+    asyncio.run(run())
+
+
+def test_spectator_joins_mid_game_without_pending(tmp_path):
+    """A spectator may join during resolution without waiting a round."""
+
+    async def run():
+        engine, _, _ = await build_engine(tmp_path)
+        await set_scenario(engine, CAST_TWO + [{"name": "Free"}], "Host")
+        await engine.process_payload("host", payload("start_game"))
+        await engine.wait_for_inference()
+        await engine.process_payload("host", payload("action", action="Open the gate"))
+        assert engine.state is GameState.AWAITING_LLM
+        await engine.player_join("p1", {"name": "One", "character": ""})
+        assert "p1" in engine.players and "p1" not in engine.pending_players
+        assert engine.players["p1"].character_name is None
+        await engine.wait_for_inference()
+        await engine.shutdown()
+
+    asyncio.run(run())
+
+
+def test_spectators_do_not_count_toward_skip_votes(tmp_path):
+    """Spectators are excluded from the skip-vote electorate."""
+
+    async def run():
+        engine, sender, _ = await build_engine(tmp_path)
+        await set_scenario(engine, CAST_TWO + [{"name": "Free"}], "Host")
+        await engine.player_join("p1", {"name": "One", "character": "Player"})
+        await engine.player_join("obs", {"name": "Watcher", "character": ""})
+        await engine.process_payload("host", payload("start_game"))
+        await engine.wait_for_inference()
+        assert engine.active_player_id == "host"
+        await engine.process_payload("obs", payload("skip_vote"))
+        assert sender.events_of_type("skip_vote")[-1].payload["needed"] == 1
+        assert "host" not in engine.round_buffer
+        await engine.shutdown()
+
+    asyncio.run(run())
+
+
+def test_returning_player_reclaims_their_character_seat(tmp_path):
+    """A name can leave and later re-claim the same character seat."""
+
+    async def run():
+        engine, _, _ = await build_engine(tmp_path)
+        await set_scenario(engine, CAST_THREE, "Host")
+        await engine.player_join("p1", {"name": "One", "character": "Player"})
+        await engine.process_payload("host", payload("start_game"))
+        await engine.wait_for_inference()
+        assert engine.claims["Player"] == "One"
+        await engine.handle_disconnect("p1")
+        assert not engine.players["p1"].is_connected
+        assert engine.claims["Player"] == "One"  # seat retained after leaving
+        await engine.player_join("p1new", {"name": "One", "character": "Player"})
+        assert engine.claims["Player"] == "One"
+        assert engine.players["p1new"].character_name == "Player"
+        assert "p1" not in engine.players
+        await engine.shutdown()
+
+    asyncio.run(run())
+
+
+def test_name_can_switch_to_spectating_while_keeping_its_character(tmp_path):
+    """A name may switch to spectating while its character seat stays reserved."""
+
+    async def run():
+        engine, _, _ = await build_engine(tmp_path)
+        await set_scenario(engine, CAST_TWO, "Host")
+        await engine.player_join("p1", {"name": "One", "character": "Player"})
+        assert engine.claims["Player"] == "One"
+        await engine.handle_disconnect("p1")
+        await engine.player_join("p1new", {"name": "One", "character": ""})
+        assert engine.players["p1new"].character_name is None
+        assert engine.claims["Player"] == "One"  # character seat retained
+        await engine.shutdown()
+
+    asyncio.run(run())
+
+
+def test_a_new_name_on_a_reused_client_id_is_a_fresh_join(tmp_path):
+    """A different name on a reused client id is a new player, not a reconnect."""
+
+    async def run():
+        engine, _, _ = await build_engine(tmp_path)
+        await set_scenario(engine, CAST_TWO, "Host")
+        await engine.handle_disconnect("host")
+        await engine.player_join("host", {"name": "Alice", "character": "Player"})
+        assert engine.players["host"].name == "Alice"
+        assert engine.players["host"].character_name == "Player"
+        assert engine.claims["Player"] == "Alice"
+        await engine.shutdown()
+
+    asyncio.run(run())

@@ -65,7 +65,7 @@ def test_unauthenticated_socket_cannot_receive_broadcasts_or_take_over_identity(
                 }
             with client.websocket_connect(f"/ws/{host_id}") as impostor:
                 join_room(impostor, host_id, code, "Impostor", "Host")
-                assert "reconnect token" in impostor.receive_json()["payload"]["msg"]
+                assert "not accepting new players" in impostor.receive_json()["payload"]["msg"]
                 impostor.send_json({"event_type": "end_game", "data": {}})
                 assert impostor.receive_json()["type"] == "error"
                 host.send_json(
@@ -78,15 +78,15 @@ def test_unauthenticated_socket_cannot_receive_broadcasts_or_take_over_identity(
                 assert engine.players[host_id].is_connected
 
 
-def test_reconnect_token_reclaims_an_existing_client_id():
-    """A private reconnect token alone can reclaim an existing client id."""
+def test_a_returning_player_reclaims_by_name_without_a_token():
+    """A returning player reclaims their seat by name; the token is optional."""
     app = create_app(FakeResolver)
     host_id = str(uuid4())
     with TestClient(app) as client:
         with client.websocket_connect(f"/ws/{host_id}") as host:
             create_room(host, host_id)
             auth_ok = receive_until(host, "auth_ok")["payload"]
-            code, token = auth_ok["invite_code"], auth_ok["reconnect_token"]
+            code = auth_ok["invite_code"]
             host.send_json(
                 {
                     "event_type": "scenario_init",
@@ -100,9 +100,6 @@ def test_reconnect_token_reclaims_an_existing_client_id():
             receive_until(host, "scenario_ready")
             with client.websocket_connect(f"/ws/{host_id}") as replacement:
                 join_room(replacement, host_id, code, "Host", "Host")
-                error = replacement.receive_json()
-                assert "reconnect token" in error["payload"]["msg"]
-                join_room(replacement, host_id, code, "Host", "Host", token)
                 receive_until(replacement, "auth_ok")
                 replacement.send_json({"event_type": "chat", "data": {"message": "Reconnected"}})
                 receive_until(replacement, "chat_echo")
@@ -206,7 +203,7 @@ def test_active_game_reconnect_restores_original_player_with_private_proof(rejoi
         with client.websocket_connect(f"/ws/{host_id}") as host:
             create_room(host, host_id)
             host_auth = receive_until(host, "auth_ok")["payload"]
-            code, host_token = host_auth["invite_code"], host_auth["reconnect_token"]
+            code = host_auth["invite_code"]
             host.send_json(
                 {
                     "event_type": "scenario_init",
@@ -220,15 +217,15 @@ def test_active_game_reconnect_restores_original_player_with_private_proof(rejoi
             receive_until(host, "scenario_ready")
             with client.websocket_connect(f"/ws/{player_id}") as player:
                 join_room(player, player_id, code, "Arxs", "Arxs")
-                player_token = receive_until(player, "auth_ok")["payload"]["reconnect_token"]
+                receive_until(player, "auth_ok")
                 host.send_json({"event_type": "start_game", "data": {}})
                 receive_until(player, "turn_directive")
                 if rejoin_host:
                     original, observer = host, player
-                    identity, name, character, token = host_id, "Host", "Host", host_token
+                    identity, name, character = host_id, "Host", "Host"
                 else:
                     original, observer = player, host
-                    identity, name, character, token = player_id, "Arxs", "Arxs", player_token
+                    identity, name, character = player_id, "Arxs", "Arxs"
                 original.close()
                 receive_until(
                     observer,
@@ -240,9 +237,8 @@ def test_active_game_reconnect_restores_original_player_with_private_proof(rejoi
                     join_room(newcomer, newcomer_id, code, "Newcomer", character)
                     assert "already been claimed" in newcomer.receive_json()["payload"]["msg"]
                 with client.websocket_connect(f"/ws/{identity}") as recovered:
-                    join_room(recovered, identity, code, name, character, "incorrect-token")
-                    assert "reconnect token" in recovered.receive_json()["payload"]["msg"]
-                    join_room(recovered, identity, code, name, character, token)
+                    # Even a stale token falls back to name-based reclaim.
+                    join_room(recovered, identity, code, name, character, "stale-token")
                     snapshot = receive_until(recovered, "auth_ok")["payload"]
                     assert snapshot["client_id"] == identity
                     assert snapshot["name"] == name

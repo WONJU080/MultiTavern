@@ -55,3 +55,52 @@ def test_admin_panel_is_open_when_no_password_is_configured():
     with TestClient(create_app(FakeResolver)) as client:
         response = client.get("/admin/rooms")
         assert "运行中的房间" in response.text
+
+
+def test_admin_panel_links_to_room_transcripts():
+    """A live room with a started game exposes its story record to the operator."""
+    settings.server.admin_password = "secret-admin"
+    app = create_app(FakeResolver)
+    host_id = str(uuid4())
+    with TestClient(app) as client:
+        response = client.post(
+            "/admin/login", data={"password": "secret-admin"}, follow_redirects=False
+        )
+        client.cookies.set("anyworld_admin", response.cookies["anyworld_admin"])
+        with client.websocket_connect(f"/ws/{host_id}") as host:
+            create_room(host, host_id, "Host", admin_password="secret-admin")
+            code = receive_until(host, "auth_ok")["payload"]["invite_code"]
+            host.send_json(
+                {
+                    "event_type": "scenario_init",
+                    "data": {
+                        "scenario": "A gate.",
+                        "characters": [{"name": "Host"}],
+                        "host_character": "Host",
+                    },
+                }
+            )
+            receive_until(host, "scenario_ready")
+            host.send_json({"event_type": "start_game", "data": {}})
+            receive_until(host, "turn_directive")
+        response = client.get("/admin/rooms")
+        assert "查看记录" in response.text
+        record = client.get(f"/admin/rooms/{normalize_invite_code(code)}/record")
+        assert record.status_code == 200
+        assert "Opening scenario" in record.text
+        assert "Host stand at a gate." in record.text
+
+
+def test_admin_record_requires_password_and_reports_missing_rooms():
+    """The record route is guarded and answers cleanly for unknown rooms."""
+    settings.server.admin_password = "secret-admin"
+    with TestClient(create_app(FakeResolver)) as client:
+        response = client.get("/admin/rooms/ABC123/record", follow_redirects=False)
+        assert response.status_code == 303
+        login = client.post(
+            "/admin/login", data={"password": "secret-admin"}, follow_redirects=False
+        )
+        client.cookies.set("anyworld_admin", login.cookies["anyworld_admin"])
+        response = client.get("/admin/rooms/ABC123/record")
+        assert response.status_code == 404
+        assert "没有剧情记录" in response.text

@@ -134,7 +134,7 @@ def test_skipped_host_rejoin_restores_host_powers(tmp_path):
         assert "host" not in engine.players
         await engine.player_join("host", {"name": "Host", "character": "Host"})
         assert engine.players["host"].is_host
-        assert engine.claims["Host"] == "host"
+        assert engine.claims["Host"] == "Host"
         await engine.shutdown()
 
     asyncio.run(run())

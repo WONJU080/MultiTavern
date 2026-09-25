@@ -30,7 +30,7 @@ def isolated_settings(monkeypatch):
     monkeypatch.setattr(
         settings,
         "server",
-        ServerConfig(admin_password=None),
+        ServerConfig(admin_password=None, disconnect_grace_seconds=0.0),
     )
     monkeypatch.setattr(
         settings,
@@ -43,3 +43,9 @@ def isolated_settings(monkeypatch):
             tokenizer_encoding=None,
         ),
     )
+
+
+@pytest.fixture(autouse=True)
+def deterministic_turn_order(monkeypatch):
+    """Keep per-round turn order deterministic unless a test overrides shuffle."""
+    monkeypatch.setattr("random.shuffle", lambda sequence: None)

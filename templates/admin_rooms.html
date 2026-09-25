@@ -19,6 +19,7 @@
     th { color: var(--muted); font-size: 0.75rem; letter-spacing: 0.04em; }
     tr:last-child td { border-bottom: none; }
     code { background: var(--bg); padding: 0.15rem 0.4rem; border-radius: 0.35rem; }
+    a { color: var(--accent); }
     button.close { padding: 0.25rem 0.7rem; border: 1px solid var(--error); border-radius: 0.4rem;
       background: transparent; color: var(--error); cursor: pointer; font-size: 0.8rem; }
     button.close:hover { background: var(--error); color: #fff; }
@@ -31,7 +32,7 @@
   {% if rooms %}
   <table>
     <thead>
-      <tr><th>邀请码</th><th>标题</th><th>状态</th><th>成员</th><th>已认领角色</th><th>创建于</th><th>空闲</th><th></th></tr>
+      <tr><th>邀请码</th><th>标题</th><th>状态</th><th>成员</th><th>已认领角色</th><th>创建于</th><th>空闲</th><th>记录</th><th></th></tr>
     </thead>
     <tbody>
       {% for room in rooms %}
@@ -43,6 +44,11 @@
         <td>{{ room.claimed }}</td>
         <td>{{ room.created }}</td>
         <td>{{ room.idle }}</td>
+        <td>
+          {% if room.has_record %}
+          <a href="/admin/rooms/{{ room.key }}/record" target="_blank">查看记录</a>
+          {% else %}—{% endif %}
+        </td>
         <td>
           <form method="post" action="/admin/rooms/{{ room.key }}/close"
             onsubmit="return confirm('确认关闭房间 {{ room.code }}？')">

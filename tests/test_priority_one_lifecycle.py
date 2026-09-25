@@ -48,10 +48,10 @@ class ControlledResolver(FakeResolver):
         await self.gate("initial")
         return await super().generate_scenario_title()
 
-    async def generate_start_state(self, cast, claims):
+    async def generate_start_state(self, cast, claims, current_time: str = ""):
         """Gate the start state generation."""
         await self.gate("start")
-        return await super().generate_start_state(cast, claims)
+        return await super().generate_start_state(cast, claims, current_time)
 
     async def plan_dice(self, actions, current_state=""):
         """Return a dice plan, optionally failing."""
@@ -64,16 +64,26 @@ class ControlledResolver(FakeResolver):
             hidden_rolls=list(actions) if self.hidden else [],
         )
 
-    async def generate_resolution(self, actions, dice_results=None, hidden_rolls=None):
+    async def generate_resolution(
+        self,
+        actions,
+        dice_results=None,
+        hidden_rolls=None,
+        current_time: str = "",
+        event_context: str = "",
+    ):
         """Return a resolution, optionally failing."""
         self.received_rolls.append(dict(dice_results or {}))
         self.received_actions.append(dict(actions))
+        self.resolution_time = current_time
+        self.event_context = event_context
         await self.gate("round")
         if self.fail_round:
             raise LLMResolutionError("PRIVATE failure")
         return RoundResolution(
             global_narrative="A breeze rises.",
             player_resolutions={name: f"{name} moves onward." for name in actions},
+            time_elapsed_minutes=30,
         )
 
     async def close(self):

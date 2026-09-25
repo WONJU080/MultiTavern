@@ -53,6 +53,12 @@ body {
     height: 100dvh;
     overflow: hidden;
 }
+#mobile-view-toggle {
+    display: none;
+}
+#mobile-menu-button {
+    display: none;
+}
 #chat-pane {
     grid-area: chat;
     background: linear-gradient(180deg, #172322, #101919);
@@ -136,6 +142,16 @@ body {
 #scenario-title {
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+}
+#game-clock {
+    flex-shrink: 0;
+    margin-left: 0.6rem;
+    padding: 0.1rem 0.45rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
 }
 #token-usage {
@@ -361,6 +377,18 @@ button:disabled {
     right: 0.6rem;
     top: 5.5rem;
 }
+#leave-room-button {
+    position: fixed;
+    z-index: 7;
+    right: 0.6rem;
+    top: 8.6rem;
+}
+#character-card-button {
+    position: fixed;
+    z-index: 7;
+    right: 0.6rem;
+    top: 11.7rem;
+}
 #log-pane > :not(.current-round):not(.latest-complete-round):not(.opening-entry):not(#game-banner) {
     opacity: 0.48;
 }
@@ -380,16 +408,46 @@ button:disabled {
 @media (max-width: 700px) {
     #grid-container {
         grid-template-columns: 100%;
-        grid-template-rows: 7% 46% 40% 7%;
-        grid-template-areas: "title" "log" "chat" "input";
+        grid-template-rows: 6% 6% 82% 6%;
+        grid-template-areas: "title" "toggle" "main" "input";
     }
     #title-pane {
         justify-content: flex-start;
-        padding: 0 7.5rem 0 0.65rem;
+        padding: 0 2.8rem 0 0.65rem;
+    }
+    #mobile-view-toggle {
+        grid-area: toggle;
+        display: flex;
+        border-bottom: 1px solid var(--border);
+    }
+    #mobile-view-toggle button {
+        flex: 1;
+        border: none;
+        background: transparent;
+        color: var(--muted);
+        font-size: 0.85rem;
+        padding: 0.4rem;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+    }
+    #mobile-view-toggle button.active {
+        color: var(--accent-bright);
+        border-bottom-color: var(--accent);
+    }
+    #log-pane {
+        grid-area: main;
     }
     #chat-pane {
-        border-top: 1px solid var(--border);
+        grid-area: main;
+        display: none;
+        border-top: 0;
         border-right: 0;
+    }
+    #grid-container.view-chat #log-pane {
+        display: none;
+    }
+    #grid-container.view-chat #chat-pane {
+        display: flex;
     }
     #player-roster {
         padding: 0.4rem 0.65rem;
@@ -418,10 +476,49 @@ button:disabled {
         -webkit-text-fill-color: var(--text);
     }
     #connection-status {
-        top: 0.15rem;
-        right: 0.35rem;
-        bottom: auto;
-        font-size: 0.65rem;
+        top: auto;
+        right: 0.5rem;
+        bottom: 0.3rem;
+        font-size: 0.6rem;
+    }
+    #mobile-menu-button {
+        display: block;
+        position: fixed;
+        z-index: 8;
+        top: 0.4rem;
+        right: 0.6rem;
+        font-size: 0.9rem;
+        line-height: 1;
+        padding: 0.15rem 0.6rem;
+    }
+    #end-game-button,
+    #retry-round-button,
+    #leave-room-button,
+    #character-card-button {
+        display: none;
+    }
+    body.menu-open #end-game-button,
+    body.menu-open #retry-round-button,
+    body.menu-open #leave-room-button,
+    body.menu-open #character-card-button {
+        display: inline-block;
+        z-index: 8;
+        right: 0.6rem;
+        font-size: 0.72rem;
+        padding: 0.3rem 0.6rem;
+        background: var(--panel);
+    }
+    body.menu-open #end-game-button {
+        top: 2.3rem;
+    }
+    body.menu-open #retry-round-button {
+        top: 5rem;
+    }
+    body.menu-open #leave-room-button {
+        top: 7.7rem;
+    }
+    body.menu-open #character-card-button {
+        top: 10.4rem;
     }
 }
 
@@ -565,6 +662,26 @@ button:disabled {
     padding: 0.3rem;
     margin: 0;
 }
+.char-card-details {
+    flex: 1 1 100%;
+    border-top: 1px dashed var(--border);
+    padding-top: 0.35rem;
+}
+.char-card-details summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 0.78rem;
+}
+.char-card-details textarea {
+    display: block;
+    width: 100%;
+    margin: 0.3rem 0;
+    resize: vertical;
+}
+#character-card-modal textarea {
+    min-height: 3rem;
+    resize: vertical;
+}
 #add-character {
     margin: 0 0 1rem;
     padding: 0.3rem 0.75rem;
@@ -596,6 +713,112 @@ button:disabled {
     cursor: default;
 }
 .character-unclaimed { opacity: 0.75; }
+
+.config-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+.config-toolbar button {
+    padding: 0.3rem 0.7rem;
+    font-size: 0.8rem;
+}
+.config-section {
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.75rem;
+    background: var(--background);
+}
+.config-section summary {
+    cursor: pointer;
+    font-weight: bold;
+    color: var(--accent-bright);
+    padding: 0.2rem 0;
+}
+.config-hint {
+    color: var(--muted);
+    font-size: 0.78rem;
+    margin: 0.4rem 0;
+}
+.check-label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.85rem;
+    margin: 0.3rem 0;
+}
+.field-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    margin: 0.4rem 0;
+    font-size: 0.82rem;
+}
+.field-row input[type="number"] { width: 5rem; }
+.config-section button {
+    margin: 0.3rem 0;
+    padding: 0.25rem 0.7rem;
+    font-size: 0.8rem;
+}
+.config-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    align-items: center;
+    margin-bottom: 0.4rem;
+}
+.config-row input,
+.config-row textarea {
+    min-width: 0;
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 0.35rem;
+    padding: 0.3rem 0.4rem;
+    font-size: 0.82rem;
+}
+.config-row textarea {
+    flex: 1 1 100%;
+    resize: vertical;
+}
+.time-rule-row .rule-activity { flex: 1 1 10rem; }
+.time-rule-row input[type="number"] { width: 4.5rem; }
+.event-row .event-name { flex: 1 1 7rem; }
+.event-row input[type="number"] { width: 3.5rem; }
+.event-row .event-description { flex: 2 1 12rem; }
+.lorebook-row .lorebook-title { flex: 0 1 8rem; }
+.lorebook-row .lorebook-keys { flex: 1 1 12rem; }
+.lorebook-row input[type="number"] { width: 4rem; }
+.prompt-block-row .prompt-block-title { flex: 0 1 9rem; }
+.prompt-block-row select { flex: 0 0 auto; }
+.config-row .check-label { flex: 0 0 auto; margin: 0; font-size: 0.78rem; }
+.config-row .remove-row {
+    flex: 0 0 auto;
+    width: 1.9rem;
+    padding: 0.15rem;
+    margin: 0;
+    font-size: 0.85rem;
+}
+#edit-scenario-button {
+    margin-left: 0.5rem;
+    padding: 0.35rem 0.8rem;
+    font-size: 0.82rem;
+}
+#earlier-rounds-anchor {
+    display: flex;
+    justify-content: center;
+    margin: 0.75rem 0;
+}
+#earlier-rounds-anchor button {
+    padding: 0.3rem 0.8rem;
+    font-size: 0.78rem;
+    color: var(--muted);
+    border-color: var(--border);
+    background: transparent;
+}
 
 #skip-vote-box {
     display: flex;
@@ -634,4 +857,9 @@ button:disabled {
 #close-room-button:hover {
     background: var(--error);
     color: #fff;
+}
+
+.character-option.spectator-option {
+    border-style: dashed;
+    color: var(--muted);
 }

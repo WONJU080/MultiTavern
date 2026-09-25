@@ -3,16 +3,28 @@
 import asyncio
 import json
 import logging
+import random
 from collections import deque
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 from core.config import settings
-from core.schemas import Character, ServerEvent
+from core.schemas import (
+    Character,
+    LorebookEntry,
+    PromptBlock,
+    SamplingConfig,
+    ServerEvent,
+    TimedEvent,
+    TimeRule,
+)
 from logic.dice import roll_d100
+from logic.game_clock import GameClock
 from logic.llm_manager import LLMBackendUnavailableError, LLMResolutionError
 from logic.lobby import CURRENT_OWNER, LobbyMixin
 from logic.models import EventSender, GameState, Player, ResolutionManager
 from logic.presentation import name_resolution
+from logic.round_history import RoundHistoryStore
 from logic.transcript import GameTranscript
 from logic.validation import clean_text
 
@@ -35,6 +47,7 @@ SKIP_ACTION = (
     "established personality and goals, and resolve it like any other action.]"
 )
 SKIP_DISPLAY = "(skipped by vote — AI decided)"
+MAX_ROUND_HISTORY = 100
 
 
 class GameEngine(LobbyMixin):
@@ -49,6 +62,8 @@ class GameEngine(LobbyMixin):
         "action": "_submit_action",
         "skip_vote": "_skip_vote",
         "retry_round": "_retry_round",
+        "history_request": "_request_history",
+        "character_update": "_update_character",
     }
 
     def __init__(self, sender: EventSender, resolver: ResolutionManager) -> None:
@@ -67,6 +82,7 @@ class GameEngine(LobbyMixin):
         self.pending_players: dict[str, Player] = {}
         self.skip_votes: dict[str, set[str]] = {}
         self.host_client_id: str | None = None
+        self._disconnect_tasks: dict[str, asyncio.Task] = {}
         self.active_player_id: str | None = None
         self.lock = asyncio.Lock()
         # Order committed transcript/events against end-game, without holding the
@@ -82,7 +98,56 @@ class GameEngine(LobbyMixin):
         self.private_guidance = ""
         self.current_scenario_state: str | None = None
         self.opening_scenario: str | None = None
+        self.time_enabled = False
+        self.game_clock = GameClock()
+        self.max_elapsed_minutes = 600
+        self.default_elapsed_minutes = 15
+        self.time_rules: list[TimeRule] = []
+        self.timed_events: list[TimedEvent] = []
+        self.fired_events: set[str] = set()
+        self.event_log: list[dict[str, object]] = []
+        self.pending_event_injections: list[str] = []
+        self.lorebook: list[LorebookEntry] = []
+        self.prompt_blocks: list[PromptBlock] = []
+        self.sampling: SamplingConfig = SamplingConfig()
+        self.round_history: list[dict[str, object]] = []
+        self.history_store = RoundHistoryStore()
+        self.random_turn_order = True
         self.transcript = GameTranscript()
+
+    def _authoritative_time_label(self) -> str:
+        """Return the server-owned clock label when time tracking is enabled."""
+        return self.game_clock.format() if self.time_enabled else ""
+
+    def _shuffle_turn_queue_locked(self) -> None:
+        """Randomize the per-round action input order when enabled."""
+        if not self.random_turn_order:
+            return
+        items = list(self.turn_queue)
+        random.shuffle(items)
+        self.turn_queue = deque(items)
+
+    def _clock_total(self) -> int:
+        """Return the absolute in-game minute count."""
+        return self.game_clock.day * GameClock.MINUTES_PER_DAY + self.game_clock.minute
+
+    def _missed_events_since(self, since_total: int | None) -> list[dict[str, object]]:
+        """Return logged global events that fired after the given absolute minute."""
+        if since_total is None:
+            return []
+        return [
+            entry for entry in self.event_log if int(entry["fired_total_minutes"]) > since_total
+        ]
+
+    def _render_catchup_note(self, player: "Player", missed: list[dict[str, object]]) -> str:
+        """Render the backstage note asking the DM to summarize a returner's absence."""
+        events = "; ".join(f"{entry['name']}: {entry['description']}" for entry in missed)
+        return (
+            f"[SYSTEM: {player.name} was offline while the in-game clock advanced to "
+            f"{self.game_clock.format()}. During their absence these global events occurred: "
+            f"{events}. Briefly summarize what this character witnessed or learned of these "
+            "events in their outcome; they are now aligned to the global time.]"
+        )
 
     def _job_current(self, epoch: int) -> bool:
         """Return whether the job's epoch is current and the session has not ended."""
@@ -172,6 +237,71 @@ class GameEngine(LobbyMixin):
         if task is not None:
             await asyncio.gather(task, return_exceptions=True)
 
+    async def suspend(self) -> None:
+        """Cancel in-flight inference and release the resolver, without ending.
+
+        Used before a server restart so a persisted room can be resumed later
+        without finalizing its transcript or broadcasting an end event.
+        """
+        async with self.lock:
+            task = self.inference_task
+            if task is not None:
+                task.cancel()
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+        for disconnect_task in self._disconnect_tasks.values():
+            disconnect_task.cancel()
+        self._disconnect_tasks.clear()
+        close = getattr(self.resolver, "close", None)
+        if close is not None:
+            await close()
+
+    def to_persistent_dict(self) -> dict[str, object]:
+        """Serialize the room's game state for persistence across restarts."""
+        serialize_resolver = getattr(self.resolver, "to_persistent_dict", None)
+        return {
+            "state": self.state.name,
+            "cast": [char.model_dump() for char in self.cast],
+            "claims": dict(self.claims),
+            "players": [
+                {
+                    "client_id": player.client_id,
+                    "name": player.name,
+                    "is_host": player.is_host,
+                    "join_index": player.join_index,
+                    "character_name": player.character_name,
+                    "reconnect_token": player.reconnect_token,
+                    "connection_version": player.connection_version,
+                    "last_seen_total": player.last_seen_total,
+                }
+                for player in self.players.values()
+            ],
+            "join_order": list(self.join_order),
+            "host_client_id": self.host_client_id,
+            "scenario_title": self.scenario_title,
+            "original_scenario": self.original_scenario,
+            "private_guidance": self.private_guidance,
+            "current_scenario_state": self.current_scenario_state,
+            "opening_scenario": self.opening_scenario,
+            "round_counter": self.round_counter,
+            "previous_actions": dict(self.previous_actions),
+            "random_turn_order": self.random_turn_order,
+            "time_enabled": self.time_enabled,
+            "game_clock": self.game_clock.to_dict(),
+            "max_elapsed_minutes": self.max_elapsed_minutes,
+            "default_elapsed_minutes": self.default_elapsed_minutes,
+            "time_rules": [rule.model_dump() for rule in self.time_rules],
+            "timed_events": [event.model_dump() for event in self.timed_events],
+            "fired_events": sorted(self.fired_events),
+            "event_log": list(self.event_log),
+            "lorebook": [entry.model_dump() for entry in self.lorebook],
+            "prompt_blocks": [block.model_dump() for block in self.prompt_blocks],
+            "sampling": self.sampling.model_dump(),
+            "round_history": list(self.round_history),
+            "transcript_path": str(self.transcript.path) if self.transcript.path else None,
+            "resolver": serialize_resolver() if serialize_resolver is not None else {},
+        }
+
     async def shutdown(
         self,
         *,
@@ -203,6 +333,9 @@ class GameEngine(LobbyMixin):
                 await self.on_ended(reason)
         if task is not None:
             await asyncio.gather(task, return_exceptions=True)
+        for disconnect_task in self._disconnect_tasks.values():
+            disconnect_task.cancel()
+        self._disconnect_tasks.clear()
         if close_resolver:
             close = getattr(self.resolver, "close", None)
             if close is not None:
@@ -212,6 +345,36 @@ class GameEngine(LobbyMixin):
         """Return the connection version of a player or pending joiner."""
         player = self.players.get(client_id) or self.pending_players.get(client_id)
         return player.connection_version if player is not None else None
+
+    def schedule_disconnect(
+        self,
+        client_id: str,
+        *,
+        expected_version: int | None,
+        still_disconnected: Callable[[], bool],
+        delay: float,
+    ) -> None:
+        """Delay departure handling so brief dropouts do not count as leaving."""
+        task = asyncio.create_task(
+            self._delayed_disconnect(client_id, expected_version, still_disconnected, delay)
+        )
+        self._disconnect_tasks[client_id] = task
+
+    async def _delayed_disconnect(
+        self,
+        client_id: str,
+        expected_version: int | None,
+        still_disconnected: Callable[[], bool],
+        delay: float,
+    ) -> None:
+        if delay and delay > 0:
+            await asyncio.sleep(delay)
+        self._disconnect_tasks.pop(client_id, None)
+        await self.handle_disconnect(
+            client_id,
+            expected_version=expected_version,
+            still_disconnected=still_disconnected,
+        )
 
     async def handle_disconnect(
         self,
@@ -254,6 +417,10 @@ class GameEngine(LobbyMixin):
                 player.connection_version += 1
                 player.departure_pending = True
                 player.return_pending = False
+                if self.time_enabled:
+                    player.last_seen_total = (
+                        self.game_clock.day * GameClock.MINUTES_PER_DAY + self.game_clock.minute
+                    )
                 directive = None
                 if self.state is GameState.ACTIVE_TURN:
                     if self.active_player_id == client_id:
@@ -300,6 +467,7 @@ class GameEngine(LobbyMixin):
                 self.players[item].character_name
                 or self.players[item].name: candidate.get(item, IDLE_ACTION)
                 for item in self.join_order
+                if self.players[item].character_name is not None
             }
             current_state = self.current_scenario_state or ""
         preflight = getattr(self.resolver, "preflight_round", None)
@@ -358,7 +526,7 @@ class GameEngine(LobbyMixin):
             eligible = {
                 player_id
                 for player_id, player in self.players.items()
-                if player_id != target and player.is_connected
+                if player_id != target and player.is_connected and player.character_name is not None
             }
             if not eligible:
                 raise ValueError("No other players are online to vote.")
@@ -418,7 +586,15 @@ class GameEngine(LobbyMixin):
             return None
         for _ in range(len(self.turn_queue)):
             client_id = self.turn_queue[0]
-            player = self.players[client_id]
+            player = self.players.get(client_id)
+            if player is None:
+                # Stale queue entries cannot advance a turn.
+                self.turn_queue.popleft()
+                continue
+            if player.character_name is None:
+                # A host without a character observes and never acts.
+                self.turn_queue.rotate(-1)
+                continue
             if client_id in self.round_buffer:
                 self.turn_queue.rotate(-1)
                 continue
@@ -454,8 +630,16 @@ class GameEngine(LobbyMixin):
         }
 
     def _take_complete_round_locked(self) -> dict[str, str] | None:
-        """Return the round's actions when every player has submitted."""
-        if not self.players or len(self.round_buffer) != len(self.players):
+        """Return the round's actions when every acting player has submitted.
+
+        A round made up entirely of disconnect-idle placeholders never resolves:
+        the story waits for at least one real player action.
+        """
+        acting = [cid for cid, player in self.players.items() if player.character_name is not None]
+        if not acting or len(self.round_buffer) != len(acting):
+            return None
+        if all(action == IDLE_ACTION for action in self.round_buffer.values()):
+            self.round_buffer.clear()
             return None
         self.state = GameState.AWAITING_LLM
         return dict(self.round_buffer)
@@ -484,6 +668,7 @@ class GameEngine(LobbyMixin):
                 "dice": None,
                 "hidden": set(),
                 "previous_state": self.current_scenario_state or "",
+                "event_context": "\n\n".join(self.pending_event_injections),
             }
         self._launch_job_locked(self._resolve_round, GameState.AWAITING_LLM)
 
@@ -534,6 +719,9 @@ class GameEngine(LobbyMixin):
                 notes.append("[SYSTEM: Explain this player's in-world return.]")
             if handover:
                 notes.append(HANDOVER_NOTE)
+            player = self.players.get(item)
+            if player is not None:
+                notes.extend(player.catchup_notes)
             if actions[item] not in (IDLE_ACTION, SKIP_ACTION):
                 previous = self.previous_actions.get(name)
                 if previous is not None and actions[item].strip() == previous.strip():
@@ -567,10 +755,18 @@ class GameEngine(LobbyMixin):
                 ),
             )
         if plan_dice is None:
-            resolution = await self.resolver.generate_resolution(llm_actions)
+            resolution = await self.resolver.generate_resolution(
+                llm_actions,
+                current_time=self._authoritative_time_label(),
+                event_context=pending.get("event_context", ""),
+            )
         else:
             resolution = await self.resolver.generate_resolution(
-                llm_actions, pending["dice"], hidden_rolls=pending["hidden"]
+                llm_actions,
+                pending["dice"],
+                hidden_rolls=pending["hidden"],
+                current_time=self._authoritative_time_label(),
+                event_context=pending.get("event_context", ""),
             )
         if (
             set(resolution.player_resolutions) != set(llm_actions)
@@ -619,6 +815,7 @@ class GameEngine(LobbyMixin):
                             player.return_pending = False
                         if handover:
                             player.handover_pending = False
+                        player.catchup_notes.clear()
                 # Mid-game joiners become players for the next round.
                 for pending_id, pending_player in list(self.pending_players.items()):
                     self.players[pending_id] = pending_player
@@ -648,12 +845,92 @@ class GameEngine(LobbyMixin):
                         character,
                     )
                 self.current_scenario_state = resolution.global_narrative
+                # Event injections consumed by this round's request are spent.
+                self.pending_event_injections = []
+                time_elapsed = None
+                event_announcements: list[str] = []
+                if self.time_enabled:
+                    elapsed = resolution.time_elapsed_minutes
+                    if elapsed is None:
+                        elapsed = self.default_elapsed_minutes
+                        LOGGER.info(
+                            "Missing time estimate round=%d; using default %d minutes",
+                            number,
+                            elapsed,
+                        )
+                    elif elapsed > self.max_elapsed_minutes:
+                        LOGGER.info(
+                            "Oversized time estimate round=%d minutes=%d; clamped to %d",
+                            number,
+                            elapsed,
+                            self.max_elapsed_minutes,
+                        )
+                        elapsed = self.max_elapsed_minutes
+                    elapsed = max(0, elapsed)
+                    self.game_clock.add_minutes(elapsed)
+                    time_elapsed = elapsed
+                    # Fixed-time events fire deterministically once the clock passes.
+                    total = self.game_clock.day * GameClock.MINUTES_PER_DAY + self.game_clock.minute
+                    for event in self.timed_events:
+                        if event.name in self.fired_events:
+                            continue
+                        due = event.day * GameClock.MINUTES_PER_DAY + event.minute
+                        if total >= due:
+                            self.fired_events.add(event.name)
+                            fired_at = self.game_clock.format()
+                            self.event_log.append(
+                                {
+                                    "name": event.name,
+                                    "description": event.description,
+                                    "public": event.public,
+                                    "fired_at": fired_at,
+                                    "fired_total_minutes": total,
+                                }
+                            )
+                            self.pending_event_injections.append(
+                                f"[SYSTEM Scheduled event fired at {fired_at}] "
+                                f"{event.name}: {event.description} This event now occurs for "
+                                "every online player at the same time. Narrate its consequences "
+                                "in this round's outcomes."
+                            )
+                            if event.public:
+                                event_announcements.append(
+                                    f"全局事件「{event.name}」: {event.description}"
+                                )
+                            LOGGER.info(
+                                "Scheduled event fired room=%s event=%s at=%s",
+                                self.room_code,
+                                event.name,
+                                fired_at,
+                            )
                 self.round_buffer.clear()
                 self.previous_actions = previous_by_name
                 self.turn_queue = deque(self.join_order)
+                self._shuffle_turn_queue_locked()
                 self.pending_resolution = None
                 self.state = GameState.ACTIVE_TURN
                 directive = self._next_turn_locked()
+                # Player-safe public history for rejoining clients; hidden dice
+                # and private guidance never enter these records.
+                history_record = {
+                    "round_number": number,
+                    "game_time": self._authoritative_time_label(),
+                    "player_order": [
+                        (self.players[item].character_name or self.players[item].name)
+                        for item in self.join_order
+                    ],
+                    "actions": {
+                        name: action
+                        for name, action in display_actions.items()
+                        if action not in (IDLE_ACTION, SKIP_DISPLAY)
+                    },
+                    "global_narrative": resolution.global_narrative,
+                    "player_resolutions": outcomes,
+                    "dice_results": public_dice,
+                }
+                self.round_history.append(history_record)
+                if len(self.round_history) > MAX_ROUND_HISTORY:
+                    del self.round_history[: len(self.round_history) - MAX_ROUND_HISTORY]
             try:
                 await self.transcript.append_round(
                     number,
@@ -669,9 +946,13 @@ class GameEngine(LobbyMixin):
                 )
             except OSError:
                 LOGGER.warning("Could not append round %s to transcript", number)
+            compact_code = self.room_code.replace("-", "") if self.room_code else ""
+            await self.history_store.append(compact_code, history_record)
             payload = display.model_dump()
             payload.update(
                 round_number=number,
+                game_time=self._authoritative_time_label(),
+                time_elapsed_minutes=time_elapsed,
                 submitted_actions={
                     name: action
                     for name, action in display_actions.items()
@@ -684,6 +965,10 @@ class GameEngine(LobbyMixin):
                 dice_results=public_dice,
             )
             await self.sender.broadcast_global(ServerEvent(type="state_update", payload=payload))
+            for announcement in event_announcements:
+                await self.sender.broadcast_global(
+                    ServerEvent(type="system_msg", payload={"msg": announcement})
+                )
             await self._publish_usage()
             if kicked:
                 for item, human, character in kicked:
@@ -705,6 +990,26 @@ class GameEngine(LobbyMixin):
                     ServerEvent(type="round_start", payload={"round_number": number + 1})
                 )
                 await self.sender.broadcast_global(directive)
+
+    async def _request_history(self, client_id: str, data: dict[str, object]) -> None:
+        """Serve an older page of the room's public round history."""
+        before_raw = data.get("before_round")
+        if before_raw is not None and (
+            isinstance(before_raw, bool) or not isinstance(before_raw, int)
+        ):
+            raise ValueError("'before_round' must be an integer.")
+        async with self.lock:
+            if not CURRENT_OWNER.get()():
+                return
+            player = self.players.get(client_id) or self.pending_players.get(client_id)
+            if player is None or not player.is_connected:
+                raise ValueError("Authenticate before requesting history.")
+        compact_code = self.room_code.replace("-", "") if self.room_code else ""
+        rounds, has_more = await self.history_store.load_before(compact_code, before_raw)
+        await self.sender.send_personal(
+            client_id,
+            ServerEvent(type="history_chunk", payload={"rounds": rounds, "has_more": has_more}),
+        )
 
     async def _publish_usage(self, client_id: str | None = None) -> None:
         """Broadcast or send the latest token usage event."""
@@ -735,3 +1040,94 @@ class GameEngine(LobbyMixin):
             client_id,
             ServerEvent(type="error", payload={"msg": message, "state": self.state.name}),
         )
+
+
+def restore_engine(
+    data: dict[str, object],
+    sender: EventSender,
+    resolver_factory: Callable[[], ResolutionManager],
+) -> GameEngine:
+    """Rebuild a game engine from a persisted room dict."""
+    engine = GameEngine(sender, resolver_factory())
+    state_name = str(data.get("state", GameState.AWAITING_HOST.name))
+    engine.state = GameState[state_name]
+    if engine.state in {GameState.ACTIVE_TURN, GameState.AWAITING_LLM}:
+        # Resume at a fresh turn; any in-flight round is simply restarted.
+        engine.state = GameState.ACTIVE_TURN
+    engine.cast = [Character(**char) for char in data.get("cast", [])]
+    engine.claims = dict(data.get("claims", {}))
+    players: dict[str, Player] = {}
+    for entry in data.get("players", []):
+        player = Player(
+            client_id=str(entry["client_id"]),
+            name=str(entry["name"]),
+            is_host=bool(entry["is_host"]),
+            join_index=int(entry.get("join_index", 0)),
+            character_name=entry.get("character_name"),
+            reconnect_token=str(entry["reconnect_token"]),
+        )
+        player.connection_version = int(entry.get("connection_version", 0))
+        player.last_seen_total = entry.get("last_seen_total")
+        player.is_connected = False
+        players[player.client_id] = player
+    engine.players = players
+    engine.join_order = [str(item) for item in data.get("join_order", [])]
+    engine.turn_queue = deque(engine.join_order)
+    engine.random_turn_order = bool(data.get("random_turn_order", True))
+    engine._shuffle_turn_queue_locked()
+    engine.host_client_id = data.get("host_client_id")
+    engine.scenario_title = data.get("scenario_title")
+    engine.original_scenario = data.get("original_scenario")
+    engine.private_guidance = str(data.get("private_guidance", ""))
+    engine.current_scenario_state = data.get("current_scenario_state")
+    engine.opening_scenario = data.get("opening_scenario")
+    engine.round_counter = int(data.get("round_counter", 0))
+    engine.previous_actions = {str(k): str(v) for k, v in data.get("previous_actions", {}).items()}
+    engine.time_enabled = bool(data.get("time_enabled", False))
+    engine.game_clock = GameClock.from_dict(data.get("game_clock"))
+    engine.max_elapsed_minutes = int(data.get("max_elapsed_minutes", 600))
+    engine.default_elapsed_minutes = int(data.get("default_elapsed_minutes", 15))
+    engine.time_rules = [
+        TimeRule(**rule) for rule in data.get("time_rules", []) if isinstance(rule, dict)
+    ]
+    engine.timed_events = [
+        TimedEvent(**event) for event in data.get("timed_events", []) if isinstance(event, dict)
+    ]
+    engine.fired_events = {str(name) for name in data.get("fired_events", [])}
+    engine.event_log = [
+        dict(entry) for entry in data.get("event_log", []) if isinstance(entry, dict)
+    ]
+    engine.lorebook = [
+        LorebookEntry(**entry) for entry in data.get("lorebook", []) if isinstance(entry, dict)
+    ]
+    engine.prompt_blocks = [
+        PromptBlock(**block) for block in data.get("prompt_blocks", []) if isinstance(block, dict)
+    ]
+    engine.sampling = SamplingConfig(**data.get("sampling", {}))
+    engine.round_history = [
+        dict(record) for record in data.get("round_history", []) if isinstance(record, dict)
+    ]
+    transcript_path = data.get("transcript_path")
+    if transcript_path:
+        engine.transcript.path = Path(str(transcript_path))
+        engine.transcript._finalized = False
+    restore_resolver = getattr(engine.resolver, "restore_from_persistent_dict", None)
+    if restore_resolver is not None:
+        restore_resolver(data.get("resolver") or {})
+    set_lorebook = getattr(engine.resolver, "set_lorebook", None)
+    if set_lorebook is not None:
+        set_lorebook(engine.lorebook)
+    set_cast = getattr(engine.resolver, "set_cast", None)
+    if set_cast is not None:
+        set_cast(engine.cast)
+    set_prompt_blocks = getattr(engine.resolver, "set_prompt_blocks", None)
+    if set_prompt_blocks is not None:
+        set_prompt_blocks(engine.prompt_blocks)
+    set_sampling = getattr(engine.resolver, "set_sampling", None)
+    if set_sampling is not None:
+        set_sampling(engine.sampling)
+    engine.active_player_id = None
+    engine.round_buffer = {}
+    engine.pending_resolution = None
+    engine.round_paused = False
+    return engine

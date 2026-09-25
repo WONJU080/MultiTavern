@@ -35,6 +35,8 @@ class Player:
     skip_pending: bool = False
     connection_version: int = 0
     reconnect_token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
+    last_seen_total: int | None = None
+    catchup_notes: list[str] = field(default_factory=list)
 
 
 class EventSender(Protocol):
@@ -68,8 +70,26 @@ class ResolutionManager(Protocol):
         """Finish timing round work, excluding the human wait before a retry."""
         ...
 
-    def set_genesis(self, scenario: str, guidance: str = "") -> None:
-        """Set the initial scenario and optional guidance."""
+    def set_genesis(
+        self, scenario: str, guidance: str = "", time_context: str | None = None
+    ) -> None:
+        """Set the initial scenario, optional guidance, and rendered time rules."""
+        ...
+
+    def set_cast(self, cast: list[Any]) -> None:
+        """Set the cast character cards used in the fixed context."""
+        ...
+
+    def set_lorebook(self, entries: list[Any]) -> None:
+        """Set the world-book entries used for keyword-triggered insertion."""
+        ...
+
+    def set_prompt_blocks(self, blocks: list[Any]) -> None:
+        """Set the ordered instruction blocks injected at fixed positions."""
+        ...
+
+    def set_sampling(self, config: Any) -> None:
+        """Set optional per-room sampling overrides."""
         ...
 
     async def discover_context_window(self) -> None:
@@ -81,7 +101,7 @@ class ResolutionManager(Protocol):
         ...
 
     async def generate_start_state(
-        self, cast: list[Character], claims: dict[str, str]
+        self, cast: list[Character], claims: dict[str, str], current_time: str = ""
     ) -> RoundResolution:
         """Introduce the cast and its player-controlled characters at game start."""
         ...
@@ -95,6 +115,8 @@ class ResolutionManager(Protocol):
         round_buffer: dict[str, str],
         dice_results: dict[str, int] | None = None,
         hidden_rolls: set[str] | None = None,
+        current_time: str = "",
+        event_context: str = "",
     ) -> RoundResolution:
         """Resolve a round of actions."""
         ...

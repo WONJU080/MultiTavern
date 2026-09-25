@@ -60,6 +60,7 @@ function browser(localStorage = storage(), sessionStorage = storage()) {
         location: { protocol: "https:", host: "game.test:4141" },
         crypto: { randomUUID }, localStorage, sessionStorage, setTimeout,
         navigator: { clipboard: { writeText: async () => {} } },
+        confirm: () => true,
     };
     const runtime = {
         window, sessionStorage, WebSocket: Socket, setTimeout, clearTimeout, console,
@@ -86,7 +87,7 @@ function browser(localStorage = storage(), sessionStorage = storage()) {
         accept(socket = sockets.at(-1), name = "Arxs", token = "private-token") {
             socket.receive("auth_ok", {
                 name, character: "金元珠", reconnect_token: token, is_host: false,
-                state: "ACTIVE_TURN",
+                state: "ACTIVE_TURN", invite_code: "ABC-123",
                 players: [{ name, character: "金元珠", connected: true, is_host: false }],
                 player_order: ["金元珠"],
                 characters: [{ name: "金元珠", description: "", claimed_by: name, connected: true }],
@@ -323,4 +324,53 @@ test("opening uses generated text and snapshots keep it separate from later roun
     assert.deepEqual(shown, [
         ["opening", "Generated opening"], ["state", "Later state", 2],
     ]);
+});
+
+test("leave room resets to login without closing the running room", async () => {
+    const tab = await joined();
+    assert.equal(tab.node("leave-room-button").hidden, false);
+    tab.runtime.leaveRoom();
+    assert.equal(tab.node("login-modal").hidden, false);
+    assert.equal(tab.node("leave-room-button").hidden, true);
+    assert.equal(tab.node("grid-container").hidden, true);
+    assert.ok(/left the room/i.test(tab.node("login-error").textContent));
+    // The socket was closed and no reconnect should be scheduled.
+    assert.equal(tab.sockets[0].readyState, 3);
+});
+
+test("rejoining after leave reconnects and sends room_info", async () => {
+    const tab = await joined();
+    tab.runtime.leaveRoom();
+    assert.equal(tab.sockets[0].readyState, 3);
+    await tab.login("Arxs", "ABC-123");
+    const next = tab.sockets.at(-1);
+    assert.notEqual(next, tab.sockets[0]);
+    next.open();
+    assert.equal(next.sent[0].event_type, "room_info");
+    assert.equal(next.sent[0].data.invite_code, "ABC-123");
+});
+
+test("creating a room after leave reconnects and sends create_room", async () => {
+    const tab = await joined();
+    tab.runtime.leaveRoom();
+    tab.runtime.setLoginMode("create");
+    tab.node("name-input").value = "Host";
+    tab.node("password-input").value = "secret-admin";
+    await tab.node("login-form").listeners.submit({ preventDefault() {} });
+    const next = tab.sockets.at(-1);
+    assert.notEqual(next, tab.sockets[0]);
+    next.open();
+    assert.equal(next.sent[0].event_type, "create_room");
+    assert.equal(next.sent[0].data.admin_password_digest,
+        createHash("sha256").update("secret-admin" + next.url.split("/").at(-1)).digest("hex"));
+});
+
+test("reconnect tokens are remembered per room", async () => {
+    const tab = await joined();
+    const clientId = tab.sockets[0].url.split("/").at(-1);
+    const record = JSON.stringify({ clientId, reconnectToken: "private-token" });
+    assert.equal(tab.localStorage.getItem("artificialDungeonIdentity:arxs:ABC123"), record);
+    assert.equal(tab.runtime.rememberedIdentity("arxs", "ABC-123").reconnectToken, "private-token");
+    assert.equal(tab.runtime.rememberedIdentity("arxs", "ABC-123").clientId, clientId);
+    assert.equal(tab.runtime.rememberedIdentity("arxs", "ZZZ-999").reconnectToken, "private-token");
 });

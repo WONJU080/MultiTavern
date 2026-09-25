@@ -3,6 +3,7 @@ server:
   port: 4141
   admin_password: null # optional; when set, creating a room requires this password
   max_characters: 7 # maximum cast size per room
+  disconnect_grace_seconds: 120 # brief dropouts (e.g. mobile backgrounding) don't count as leaving
   empty_room_timeout_seconds: null      # null = never auto-delete empty pre-game rooms
   abandoned_room_timeout_seconds: null  # null = never auto-delete abandoned games
   # sweep_interval_seconds: 30
@@ -16,6 +17,7 @@ llm:
   tokenizer_encoding: null # DeepSeek tokenizer is unknown to tiktoken; byte estimate is used
   model_name: "deepseek-chat"
   structured_outputs: false # DeepSeek only supports JSON output mode, not json_schema
+  max_retries: 2 # allow two repair attempts for invalid model output
   system_prompt: |
     You are the Dungeon Master, world simulator, and rules arbiter for a multiplayer text
     RPG. Write vivid but concise prose and maintain one causally consistent world state

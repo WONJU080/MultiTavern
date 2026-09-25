@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Anyworld</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=16">
+  <link rel="stylesheet" href="/static/css/style.css?v=20">
   <link rel="icon" type="image/png" href="/static/favicon/favicon-96x96.png" sizes="96x96" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon/favicon.svg" />
   <link rel="shortcut icon" href="/static/favicon/favicon.ico" />
@@ -28,6 +28,7 @@
     </section>
     <header id="title-pane">
       <span id="scenario-title">Awaiting scenario initialization...</span>
+      <span id="game-clock" hidden aria-label="In-game clock"></span>
       <details id="token-usage" hidden>
         <summary aria-label="Show token accounting"><span id="token-chart" role="img"
           aria-label="Estimated retained context"></span><span id="token-count"></span></summary>
@@ -35,6 +36,10 @@
       </details>
       <span id="player-identity" aria-label="Current player"></span>
     </header>
+    <nav id="mobile-view-toggle" aria-label="View switcher">
+      <button type="button" id="view-story" class="active">剧情</button>
+      <button type="button" id="view-chat">聊天</button>
+    </nav>
     <section id="log-pane" data-pane-title="Game State" aria-label="Game state: scenario state and player actions"
       aria-live="polite">
       <img id="game-banner" src="/static/media/AnyworldBanner.jpg" alt="Anyworld"
@@ -79,15 +84,67 @@
       <section id="scenario-step">
         <h2>Create the scenario</h2>
         <form id="scenario-form">
-          <label id="cast-label">Characters — create the cast, then pick the one you play:</label>
+          <div class="config-toolbar">
+            <button type="button" id="load-config-button">Load config file</button>
+            <button type="button" id="export-config-button">Export config file</button>
+            <input type="file" id="load-config-input" accept=".json,application/json" hidden>
+          </div>
+          <label id="cast-label">Characters — create the cast; optionally pick the one you play (leave empty to observe):</label>
           <div id="character-editor"></div>
           <button type="button" id="add-character">+ Add character</button>
+          <label class="check-label"><input type="checkbox" id="random-turn-order" checked> Randomize the action input order every round</label>
           <label for="scenario-input">Describe the setting, characters, and opening situation</label>
           <textarea id="scenario-input" maxlength="500000" required></textarea>
           <label for="guidance-input">Additional DM guidance (optional)</label>
           <textarea id="guidance-input" maxlength="500000"
             placeholder="Example: Include a small possibility of something extremely random happening whenever players act."></textarea>
-          <button type="submit">Generate scenario</button>
+          <details class="config-section">
+            <summary>In-game clock &amp; time rules (optional)</summary>
+            <label class="check-label"><input type="checkbox" id="time-enabled"> Enable the authoritative clock</label>
+            <div id="time-config-fields" hidden>
+              <div class="field-row">
+                <label for="time-start-day">Start day</label>
+                <input id="time-start-day" type="number" min="0" max="100000" value="1">
+                <label for="time-start-time">Start time</label>
+                <input id="time-start-time" type="time" value="06:30">
+              </div>
+              <div class="field-row">
+                <label for="time-max-elapsed">Max minutes per round</label>
+                <input id="time-max-elapsed" type="number" min="0" max="525600" value="600">
+                <label for="time-default-elapsed">Default when AI omits it</label>
+                <input id="time-default-elapsed" type="number" min="0" max="525600" value="15">
+              </div>
+              <p class="config-hint">Reference durations — the AI estimates each round's elapsed minutes from these:</p>
+              <div id="time-rules-editor"></div>
+              <button type="button" id="add-time-rule">+ Add duration rule</button>
+            </div>
+          </details>
+          <details class="config-section">
+            <summary>Fixed-time events (optional, requires the clock)</summary>
+            <p class="config-hint">Each event fires exactly once when the clock reaches its time, for every online player simultaneously.</p>
+            <div id="events-editor"></div>
+            <button type="button" id="add-event">+ Add event</button>
+          </details>
+          <details class="config-section">
+            <summary>World book / lorebook (optional)</summary>
+            <p class="config-hint">Entries are injected into the AI's context only when their keywords appear in recent play. Never shown to players.</p>
+            <div id="lorebook-editor"></div>
+            <button type="button" id="add-lorebook">+ Add entry</button>
+          </details>
+          <details class="config-section">
+            <summary>Prompt blocks &amp; sampling (advanced)</summary>
+            <p class="config-hint">Ordered instruction blocks placed at fixed prompt positions, plus generation sampling overrides. Backstage material; never shown to players.</p>
+            <div class="field-row">
+              <label for="sampling-temperature">temperature (0–2, empty = default)</label>
+              <input id="sampling-temperature" type="number" min="0" max="2" step="0.01">
+              <label for="sampling-top-p">top_p (0–1, empty = default)</label>
+              <input id="sampling-top-p" type="number" min="0" max="1" step="0.01">
+            </div>
+            <p class="config-hint">Positions: system = after the core system prompt · scenario = after the scenario/guidance · output = right before generation.</p>
+            <div id="prompt-blocks-editor"></div>
+            <button type="button" id="add-prompt-block">+ Add prompt block</button>
+          </details>
+          <button type="submit" id="scenario-submit">Generate scenario</button>
         </form>
       </section>
       <section id="lobby-step" hidden>
@@ -103,6 +160,7 @@
           <ul id="lobby-player-list"></ul>
         </div>
         <button id="start-button" type="button">Start game</button>
+        <button id="edit-scenario-button" type="button" class="secondary">Edit scenario &amp; config</button>
       </section>
       <p id="host-status" role="status"></p>
       <button id="close-room-button" type="button">Close room</button>
@@ -113,10 +171,32 @@
     <span class="thinking-orb" aria-hidden="true"></span>
     The Dungeon Master is weaving the outcome…
   </div>
+  <div id="character-card-modal" class="modal" role="dialog" aria-modal="true" hidden>
+    <form id="character-card-form" class="modal-card">
+      <h2>我的角色卡</h2>
+      <p class="config-hint">这些内容会作为你的角色设定常驻 AI 上下文；队友也能看到你的角色卡。</p>
+      <label for="character-card-description">描述</label>
+      <textarea id="character-card-description" maxlength="50000" rows="3"></textarea>
+      <label for="character-card-personality">性格</label>
+      <textarea id="character-card-personality" maxlength="10000" rows="3"
+        placeholder="例：关界-值义-欲守-动营-表封-防持-压控；冷静、务实……"></textarea>
+      <label for="character-card-style">语言风格</label>
+      <textarea id="character-card-style" maxlength="10000" rows="2"
+        placeholder="例：短句、克制；自称'我'，不绕弯子……"></textarea>
+      <label for="character-card-example">示例台词</label>
+      <textarea id="character-card-example" maxlength="10000" rows="2"
+        placeholder="例：“航海不是浪漫的事。航海是运力、成本和补给线的数学。”"></textarea>
+      <button type="submit" id="character-card-save">Save</button>
+      <button type="button" id="character-card-close" class="secondary">Close</button>
+    </form>
+  </div>
   <button id="end-game-button" type="button" hidden>End game</button>
   <button id="retry-round-button" type="button" hidden>Retry paused round</button>
+  <button id="leave-room-button" type="button" hidden>Leave room</button>
+  <button id="character-card-button" type="button" hidden>我的角色卡</button>
+  <button id="mobile-menu-button" type="button" hidden aria-label="Menu">⋯</button>
   <div id="connection-status" role="status">Connecting...</div>
-  <script src="/static/js/app.js?v=rooms-1"></script>
+  <script src="/static/js/app.js?v=rooms-19"></script>
 </body>
 
 </html>

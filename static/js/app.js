@@ -59,19 +59,37 @@ function identityKey(name) {
     return `artificialDungeonIdentity:${name.trim().toLowerCase()}`;
 }
 
+function roomIdentityKey(name, inviteCode) {
+    const compact = String(inviteCode || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    return `${identityKey(name)}:${compact}`;
+}
+
 function rememberAuth(auth) {
     savedAuth = auth;
     writeStored("sessionStorage", "artificialDungeonAuth", JSON.stringify(auth));
 }
 
-function rememberedIdentity(name) {
-    const identity = readStoredObject("localStorage", identityKey(name));
-    if (typeof identity?.clientId !== "string" ||
-        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(identity.clientId) ||
-        typeof identity.reconnectToken !== "string" || !identity.reconnectToken) {
-        return null;
+function validIdentity(identity) {
+    return (
+        identity &&
+        typeof identity.clientId === "string" &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(identity.clientId) &&
+        typeof identity.reconnectToken === "string" &&
+        Boolean(identity.reconnectToken)
+    );
+}
+
+function rememberedIdentity(name, inviteCode) {
+    // Reconnect tokens are per room: the same name in another room has a
+    // different token, so prefer the room-specific record when available.
+    if (inviteCode) {
+        const roomIdentity = readStoredObject("localStorage", roomIdentityKey(name, inviteCode));
+        if (validIdentity(roomIdentity)) {
+            return roomIdentity;
+        }
     }
-    return identity;
+    const identity = readStoredObject("localStorage", identityKey(name));
+    return validIdentity(identity) ? identity : null;
 }
 
 const socketScheme = window.location.protocol === "https:" ? "wss" : "ws";
@@ -105,14 +123,37 @@ const elements = {
     scenarioForm: document.getElementById("scenario-form"),
     scenario: document.getElementById("scenario-input"),
     guidance: document.getElementById("guidance-input"),
+    scenarioSubmit: document.getElementById("scenario-submit"),
     lobbyStep: document.getElementById("lobby-step"),
     startButton: document.getElementById("start-button"),
+    editScenarioButton: document.getElementById("edit-scenario-button"),
     hostStatus: document.getElementById("host-status"),
     closeRoomButton: document.getElementById("close-room-button"),
+    timeEnabled: document.getElementById("time-enabled"),
+    timeConfigFields: document.getElementById("time-config-fields"),
+    timeStartDay: document.getElementById("time-start-day"),
+    timeStartTime: document.getElementById("time-start-time"),
+    timeMaxElapsed: document.getElementById("time-max-elapsed"),
+    timeDefaultElapsed: document.getElementById("time-default-elapsed"),
+    timeRulesEditor: document.getElementById("time-rules-editor"),
+    addTimeRule: document.getElementById("add-time-rule"),
+    eventsEditor: document.getElementById("events-editor"),
+    addEvent: document.getElementById("add-event"),
+    lorebookEditor: document.getElementById("lorebook-editor"),
+    addLorebook: document.getElementById("add-lorebook"),
+    loadConfigButton: document.getElementById("load-config-button"),
+    exportConfigButton: document.getElementById("export-config-button"),
+    loadConfigInput: document.getElementById("load-config-input"),
+    samplingTemperature: document.getElementById("sampling-temperature"),
+    samplingTopP: document.getElementById("sampling-top-p"),
+    promptBlocksEditor: document.getElementById("prompt-blocks-editor"),
+    addPromptBlock: document.getElementById("add-prompt-block"),
+    randomTurnOrder: document.getElementById("random-turn-order"),
     inviteBox: document.getElementById("invite-box"),
     inviteCode: document.getElementById("invite-code"),
     copyInvite: document.getElementById("copy-invite"),
     title: document.getElementById("scenario-title"),
+    gameClock: document.getElementById("game-clock"),
     identity: document.getElementById("player-identity"),
     log: document.getElementById("log-pane"),
     playerList: document.getElementById("player-list"),
@@ -133,16 +174,35 @@ const elements = {
     tokenCount: document.getElementById("token-count"),
     endGameButton: document.getElementById("end-game-button"),
     retryRoundButton: document.getElementById("retry-round-button"),
+    leaveRoomButton: document.getElementById("leave-room-button"),
+    characterCardButton: document.getElementById("character-card-button"),
+    characterCardModal: document.getElementById("character-card-modal"),
+    characterCardForm: document.getElementById("character-card-form"),
+    characterCardClose: document.getElementById("character-card-close"),
+    ccDescription: document.getElementById("character-card-description"),
+    ccPersonality: document.getElementById("character-card-personality"),
+    ccStyle: document.getElementById("character-card-style"),
+    ccExample: document.getElementById("character-card-example"),
+    mobileMenuButton: document.getElementById("mobile-menu-button"),
+    viewStory: document.getElementById("view-story"),
+    viewChat: document.getElementById("view-chat"),
 };
 
 let authenticated = false;
 let isHost = false;
 let loginMode = "join";
 let roomClosed = false;
+let leftRoom = false;
+let reconnectWhenVisible = false;
 let pendingJoin = null;
+let pendingRoomInfo = null;
+let pendingCreateAuth = null;
 let myName = "";
+let amSpectator = false;
 let votedFor = false;
 let lastStartedRound = 0;
+let oldestLoadedRound = null;
+let ownCharacterCard = null;
 const renderedActions = new Set();
 const playerColors = new Map();
 const MAX_LOG_ENTRIES = 2000;
@@ -211,6 +271,7 @@ function renderPlayers(payload = {}) {
     const players = payload.players || [];
     const connected = players.filter((player) => player.connected).length;
     elements.lobbyPlayerCount.textContent = `${connected} of ${players.length} players connected`;
+    const spectators = players.filter((player) => !player.character);
     [elements.playerList, elements.lobbyPlayerList].forEach((list) => {
         list.replaceChildren();
         characters.forEach((char) => {
@@ -230,6 +291,20 @@ function renderPlayers(payload = {}) {
             status.textContent = char.claimed_by
                 ? (char.connected ? "Connected" : "Disconnected")
                 : "Unclaimed";
+            item.append(dot, name, status);
+            list.appendChild(item);
+        });
+        spectators.forEach((player) => {
+            const item = document.createElement("li");
+            item.className = player.connected ? "player-online" : "player-offline";
+            const dot = document.createElement("span");
+            dot.className = "presence-dot";
+            dot.setAttribute("aria-hidden", "true");
+            const name = document.createElement("span");
+            name.textContent = `${player.name} · 观众`;
+            const status = document.createElement("span");
+            status.className = "player-presence-label";
+            status.textContent = player.connected ? "Connected" : "Disconnected";
             item.append(dot, name, status);
             list.appendChild(item);
         });
@@ -340,7 +415,7 @@ function showHostStep(state) {
 
 function updateSkipVote(activePlayerId) {
     const ownTurn = activePlayerId === clientId;
-    elements.skipVoteBox.hidden = ownTurn || !activePlayerId;
+    elements.skipVoteBox.hidden = ownTurn || !activePlayerId || amSpectator;
     votedFor = false;
     elements.skipVoteButton.disabled = false;
     elements.skipVoteStatus.textContent = "";
@@ -377,8 +452,13 @@ function roomWasClosed(message) {
     elements.actionInput.disabled = true;
     elements.endGameButton.hidden = true;
     elements.retryRoundButton.hidden = true;
+    elements.leaveRoomButton.hidden = true;
+    elements.mobileMenuButton.hidden = true;
     elements.inviteBox.hidden = true;
     elements.hostModal.hidden = true;
+    elements.characterCardButton.hidden = true;
+    elements.characterCardModal.hidden = true;
+    ownCharacterCard = null;
     elements.loginModal.hidden = false;
     elements.loginError.textContent = message;
     elements.connectionStatus.textContent = "Disconnected";
@@ -394,37 +474,286 @@ function wasRemoved(message) {
     elements.actionInput.disabled = true;
     elements.endGameButton.hidden = true;
     elements.retryRoundButton.hidden = true;
+    elements.leaveRoomButton.hidden = true;
+    elements.mobileMenuButton.hidden = true;
     elements.inviteBox.hidden = true;
     elements.hostModal.hidden = true;
     elements.skipVoteBox.hidden = true;
+    elements.characterCardButton.hidden = true;
+    elements.characterCardModal.hidden = true;
+    ownCharacterCard = null;
     elements.loginModal.hidden = false;
     elements.loginError.textContent = message;
     elements.connectionStatus.textContent = "Connected — rejoin to play";
 }
 
+function leaveRoom() {
+    if (!window.confirm("Leave this room? It keeps running and you can rejoin with the invite code.")) {
+        return;
+    }
+    closeMobileMenu();
+    leftRoom = true;
+    roomClosed = true;
+    authenticated = false;
+    isHost = false;
+    amSpectator = false;
+    savedAuth = null;
+    writeStored("sessionStorage", "artificialDungeonAuth", null);
+    for (const child of [...elements.log.children]) {
+        if (child.id !== "game-banner") {
+            child.remove();
+        }
+    }
+    renderedActions.clear();
+    playerColors.clear();
+    lastStartedRound = 0;
+    oldestLoadedRound = null;
+    elements.title.textContent = "Awaiting scenario initialization...";
+    elements.grid.hidden = true;
+    elements.chatInput.disabled = true;
+    elements.actionInput.disabled = true;
+    elements.endGameButton.hidden = true;
+    elements.retryRoundButton.hidden = true;
+    elements.leaveRoomButton.hidden = true;
+    elements.mobileMenuButton.hidden = true;
+    elements.inviteBox.hidden = true;
+    elements.hostModal.hidden = true;
+    elements.skipVoteBox.hidden = true;
+    elements.characterCardButton.hidden = true;
+    elements.characterCardModal.hidden = true;
+    ownCharacterCard = null;
+    elements.loginModal.hidden = false;
+    elements.loginError.textContent = "You left the room. It is still running; rejoin with the invite code.";
+    elements.connectionStatus.textContent = "Left the room";
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+    }
+}
+
+function setGameClock(label) {
+    if (label) {
+        elements.gameClock.hidden = false;
+        elements.gameClock.textContent = label;
+    } else {
+        elements.gameClock.hidden = true;
+        elements.gameClock.textContent = "";
+    }
+}
+
+function cacheOwnCharacterCard(payload) {
+    const characters = payload.characters || [];
+    const mine = characters.find((char) => char.claimed_by === myName);
+    ownCharacterCard = mine || null;
+    elements.characterCardButton.hidden = amSpectator || !ownCharacterCard;
+}
+
+function openCharacterCard() {
+    if (!ownCharacterCard) {
+        return;
+    }
+    elements.ccDescription.value = ownCharacterCard.description || "";
+    elements.ccPersonality.value = ownCharacterCard.personality || "";
+    elements.ccStyle.value = ownCharacterCard.style || "";
+    elements.ccExample.value = ownCharacterCard.example_dialogue || "";
+    elements.characterCardModal.hidden = false;
+}
+
+function closeCharacterCard() {
+    elements.characterCardModal.hidden = true;
+}
+
+elements.characterCardButton.addEventListener("click", openCharacterCard);
+elements.characterCardClose.addEventListener("click", closeCharacterCard);
+elements.characterCardForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (
+        send("character_update", {
+            description: elements.ccDescription.value.trim(),
+            personality: elements.ccPersonality.value.trim(),
+            style: elements.ccStyle.value.trim(),
+            example_dialogue: elements.ccExample.value.trim(),
+        })
+    ) {
+        closeCharacterCard();
+    }
+});
+
+function renderHistoryRound(record) {
+    if (!record || !Number.isInteger(record.round_number)) {
+        return;
+    }
+    setPlayerOrder(record.player_order || []);
+    startRound(record.round_number);
+    Object.entries(record.actions || {}).forEach(([playerName, action]) => {
+        showAction(record.round_number, playerName, action);
+    });
+    appendState(record.global_narrative, record.round_number);
+    Object.entries(record.dice_results || {}).forEach(([player, roll]) => {
+        appendText(
+            elements.log,
+            `🎲 ${player} rolled ${roll}/100`,
+            `dice-entry current-round${playerColorClass(player)}`,
+        );
+    });
+    Object.entries(record.player_resolutions || {}).forEach(([player, resolution]) => {
+        appendText(
+            elements.log,
+            `[${player}] ${resolution}`,
+            `resolution-entry current-round${playerColorClass(player)}`,
+        );
+    });
+    markRoundComplete();
+}
+
+function historyText(text, className) {
+    const entry = document.createElement("p");
+    entry.className = className;
+    entry.textContent = text;
+    return entry;
+}
+
+function ensureHistoryAnchor() {
+    let anchor = document.getElementById("earlier-rounds-anchor");
+    if (anchor) {
+        return anchor;
+    }
+    anchor = document.createElement("div");
+    anchor.id = "earlier-rounds-anchor";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.id = "history-earlier-button";
+    button.textContent = "Load earlier rounds";
+    button.addEventListener("click", requestEarlierRounds);
+    anchor.appendChild(button);
+    const opening = elements.log.querySelector(".opening-scenario");
+    const banner = document.getElementById("game-banner");
+    (opening || banner).after(anchor);
+    return anchor;
+}
+
+function requestEarlierRounds() {
+    const button = document.getElementById("history-earlier-button");
+    if (!button || oldestLoadedRound == null) {
+        return;
+    }
+    button.disabled = true;
+    button.textContent = "Loading...";
+    send("history_request", { before_round: oldestLoadedRound });
+}
+
+function renderEarlierRounds(records) {
+    const button = document.getElementById("history-earlier-button");
+    if (!records.length) {
+        if (button) {
+            button.hidden = true;
+        }
+        return;
+    }
+    const anchor = ensureHistoryAnchor();
+    const fragment = document.createDocumentFragment();
+    records.forEach((record) => {
+        if (!record || !Number.isInteger(record.round_number)) {
+            return;
+        }
+        setPlayerOrder(record.player_order || []);
+        fragment.appendChild(
+            historyText(`Round ${record.round_number}:`, "round-heading"),
+        );
+        Object.entries(record.actions || {}).forEach(([playerName, action]) => {
+            fragment.appendChild(
+                historyText(
+                    `${playerName} attempts: ${action}`,
+                    `action-entry${playerColorClass(playerName)}`,
+                ),
+            );
+        });
+        const entry = document.createElement("article");
+        entry.className = "state-entry";
+        const label = document.createElement("strong");
+        label.className = "state-round-label";
+        label.textContent = `Round ${record.round_number} result`;
+        const narrative = document.createElement("p");
+        narrative.className = "state-narrative";
+        narrative.textContent = record.global_narrative;
+        entry.append(label, narrative);
+        fragment.appendChild(entry);
+        Object.entries(record.dice_results || {}).forEach(([player, roll]) => {
+            fragment.appendChild(
+                historyText(
+                    `🎲 ${player} rolled ${roll}/100`,
+                    `dice-entry${playerColorClass(player)}`,
+                ),
+            );
+        });
+        Object.entries(record.player_resolutions || {}).forEach(([player, resolution]) => {
+            fragment.appendChild(
+                historyText(
+                    `[${player}] ${resolution}`,
+                    `resolution-entry${playerColorClass(player)}`,
+                ),
+            );
+        });
+    });
+    anchor.after(fragment);
+    oldestLoadedRound = records[0].round_number;
+    trimContainer(elements.log, MAX_LOG_ENTRIES);
+    if (button) {
+        button.disabled = false;
+        button.textContent = "Load earlier rounds";
+    }
+}
+
 function applySnapshot(payload) {
     isHost = payload.is_host;
     myName = payload.name;
+    amSpectator = !payload.character;
+    cacheOwnCharacterCard(payload);
+    setGameClock(payload.game_time);
     elements.retryRoundButton.hidden = !isHost || !payload.round_paused;
     elements.actionInput.disabled = true;
     setThinking(payload.state === "AWAITING_LLM" && !payload.round_paused);
     setPlayerOrder(payload.player_order);
     renderPlayers(payload);
-    const identity = payload.character ? `${payload.name} (${payload.character})` : payload.name;
-    elements.identity.textContent = `${identity}${isHost ? " · Host" : ""}`;
+    const role = payload.character
+        ? `(${payload.character})`
+        : (isHost ? "· 主持人" : "· 观众");
+    elements.identity.textContent = `${payload.name} ${role}`;
     if (payload.scenario_title) {
         elements.title.textContent = displayGameTitle(payload.scenario_title);
     }
     const emptyLog = !elements.log.querySelector(":scope > :not(#game-banner)");
     appendScenario(payload.opening_scenario);
     if (emptyLog) {
-        if (payload.completed_round_number && payload.scenario_state) {
+        oldestLoadedRound = null;
+        const history = Array.isArray(payload.round_history) ? payload.round_history : [];
+        if (history.length) {
+            history.forEach(renderHistoryRound);
+            oldestLoadedRound = history[0].round_number;
+            const anchor = ensureHistoryAnchor();
+            const button = anchor.querySelector("button");
+            if (button) {
+                button.hidden = false;
+                button.disabled = false;
+                button.textContent = "Load earlier rounds";
+            }
+        } else if (payload.completed_round_number && payload.scenario_state) {
             appendState(payload.scenario_state, payload.completed_round_number);
         }
     }
     if (payload.round_number) {
         startRound(payload.round_number);
         syncActions(payload.round_number, payload.submitted_actions);
+    }
+    if (payload.catchup && payload.catchup.missed_minutes > 0) {
+        const missed = payload.catchup.missed_events.length
+            ? ` Missed events: ${payload.catchup.missed_events.join(", ")}.`
+            : "";
+        appendText(
+            elements.chatMessages,
+            `You were offline from ${payload.catchup.from} to ${payload.catchup.to} (${payload.catchup.missed_minutes} minutes).${missed}`,
+            "chat-entry",
+            MAX_CHAT_ENTRIES,
+        );
     }
     if (payload.state === "ACTIVE_TURN") {
         applyTurn(payload.active_player_id, payload.active_player_name);
@@ -448,22 +777,41 @@ function handleMessage(message) {
         });
         // Persist only the identity proof, never the password or password digest.
         // A reopened tab still asks for credentials before it can reclaim this player.
-        writeStored("localStorage", identityKey(payload.name), JSON.stringify({
+        const identityRecord = JSON.stringify({
             clientId,
             reconnectToken: payload.reconnect_token,
-        }));
+        });
+        writeStored("localStorage", identityKey(payload.name), identityRecord);
+        if (payload.invite_code) {
+            writeStored(
+                "localStorage",
+                roomIdentityKey(payload.name, payload.invite_code),
+                identityRecord,
+            );
+        }
         authenticated = true;
         roomClosed = false;
+        leftRoom = false;
         elements.chatInput.disabled = false;
         elements.connectionStatus.textContent = "Connected";
         elements.loginModal.hidden = true;
         elements.grid.hidden = false;
+        elements.leaveRoomButton.hidden = false;
+        elements.mobileMenuButton.hidden = false;
         elements.loginError.textContent = "";
         elements.joinStep.hidden = true;
         applySnapshot(payload);
         showInviteCode(payload.invite_code);
     } else if (type === "room_info") {
         renderCharacterPicker(payload);
+    } else if (type === "history_chunk") {
+        renderEarlierRounds(payload.rounds || []);
+        if (payload.has_more === false) {
+            const button = document.getElementById("history-earlier-button");
+            if (button) {
+                button.hidden = true;
+            }
+        }
     } else if (type === "turn_directive") {
         startRound(payload.round_number);
         syncActions(payload.round_number, payload.submitted_actions);
@@ -480,6 +828,9 @@ function handleMessage(message) {
     } else if (type === "state_update") {
         setThinking(false);
         setPlayerOrder(payload.player_order);
+        if (payload.game_time !== undefined) {
+            setGameClock(payload.game_time);
+        }
         if (payload.round_title) {
             elements.title.textContent = displayGameTitle(payload.round_title);
         }
@@ -503,6 +854,7 @@ function handleMessage(message) {
         markRoundComplete();
     } else if (type === "player_roster") {
         renderPlayers(payload);
+        cacheOwnCharacterCard(payload);
     } else if (type === "dm_thinking") {
         setThinking(Boolean(payload.active));
         if (payload.active) {
@@ -582,10 +934,10 @@ function handleMessage(message) {
         if (payload.characters) {
             renderPlayers({ players: [], characters: payload.characters });
         }
-        elements.scenarioForm.querySelector("button").disabled = false;
+        elements.scenarioSubmit.disabled = false;
     } else if (type === "error") {
         showError(payload.msg || "Unknown server error.");
-        elements.scenarioForm.querySelector("button").disabled = false;
+        elements.scenarioSubmit.disabled = false;
         elements.startButton.disabled = false;
         if (payload.state) {
             showHostStep(payload.state);
@@ -621,6 +973,14 @@ function connectSocket() {
         elements.connectionStatus.textContent = savedAuth ? "Rejoining..." : "Connected";
         if (savedAuth) {
             socket.send(JSON.stringify({ event_type: "join_room", data: savedAuth }));
+        } else if (pendingRoomInfo) {
+            const code = pendingRoomInfo;
+            pendingRoomInfo = null;
+            socket.send(JSON.stringify({ event_type: "room_info", data: { invite_code: code } }));
+        } else if (pendingCreateAuth) {
+            const auth = pendingCreateAuth;
+            pendingCreateAuth = null;
+            socket.send(JSON.stringify({ event_type: "create_room", data: auth }));
         }
     });
     socket.addEventListener("message", (event) => {
@@ -640,15 +1000,37 @@ function connectSocket() {
         elements.actionInput.disabled = true;
         elements.chatInput.disabled = true;
         if (roomClosed) {
+            elements.connectionStatus.textContent = leftRoom ? "Left the room" : "Disconnected";
             return;
         }
-        const delay = Math.min(1000 * (2 ** reconnectAttempts), 15000);
-        reconnectAttempts += 1;
-        reconnectTimer = window.setTimeout(connectSocket, delay);
+        // Do not reconnect while the page is in the background: mobile systems
+        // would otherwise keep cycling the socket and reset the server's
+        // departure grace period forever. Reconnect when visible again.
+        if (document.hidden) {
+            reconnectWhenVisible = true;
+            return;
+        }
+        scheduleReconnect();
     });
     socket.addEventListener("error", () => {
         if (ws !== socket) return;
         elements.connectionStatus.textContent = "Connection error";
+    });
+}
+
+function scheduleReconnect() {
+    const delay = Math.min(1000 * (2 ** reconnectAttempts), 15000);
+    reconnectAttempts += 1;
+    reconnectTimer = window.setTimeout(connectSocket, delay);
+}
+
+if (document.addEventListener) {
+    document.addEventListener("visibilitychange", () => {
+        if (!document.hidden && reconnectWhenVisible) {
+            reconnectWhenVisible = false;
+            reconnectAttempts = 0;
+            scheduleReconnect();
+        }
     });
 }
 
@@ -737,12 +1119,12 @@ elements.loginForm.addEventListener("submit", async (event) => {
             if (adminPassword) {
                 auth.admin_password_digest = await passwordDigest(adminPassword, targetId);
             }
-            // Persist only the join identity, never an admin password digest.
-            rememberAuth({ name, reconnect_token: reconnectToken, invite_code: auth.invite_code });
             roomClosed = false;
+            leftRoom = false;
             if (targetId !== clientId || ws.readyState !== WebSocket.OPEN) {
                 clientId = targetId;
                 writeStored("sessionStorage", "artificialDungeonClientId", clientId);
+                pendingCreateAuth = auth;
                 connectSocket();
             } else {
                 send("create_room", auth);
@@ -750,10 +1132,17 @@ elements.loginForm.addEventListener("submit", async (event) => {
         } else {
             const inviteCode = elements.invite.value.trim();
             pendingJoin = { name, invite_code: inviteCode };
+            roomClosed = false;
+            leftRoom = false;
             elements.joinStep.hidden = false;
             elements.joinStatus.textContent = "Loading characters...";
             elements.joinCharacterList.replaceChildren();
-            send("room_info", { invite_code: inviteCode });
+            if (ws.readyState !== WebSocket.OPEN) {
+                pendingRoomInfo = inviteCode;
+                connectSocket();
+            } else {
+                send("room_info", { invite_code: inviteCode });
+            }
         }
     } catch (error) {
         showError(error.message);
@@ -767,28 +1156,31 @@ function renderCharacterPicker(payload) {
         elements.joinStatus.textContent = "This room is not accepting new players.";
         return;
     }
-    const available = characters.filter((char) => !char.claimed_by || char.claimed_by === pendingJoin?.name);
     if (!characters.length) {
         elements.joinStatus.textContent = "The room has not defined its cast yet.";
         return;
     }
-    if (!available.length) {
-        elements.joinStatus.textContent = "Every character has already been claimed.";
-        return;
-    }
     elements.joinStatus.textContent = "";
+    const observer = document.createElement("button");
+    observer.type = "button";
+    observer.className = "character-option spectator-option";
+    observer.textContent = "旁观（不认领角色，仅观看）";
+    observer.addEventListener("click", () => chooseCharacter(""));
+    elements.joinCharacterList.appendChild(observer);
     for (const char of characters) {
         const item = document.createElement("button");
         item.type = "button";
         item.className = "character-option";
-        const taken = Boolean(char.claimed_by);
+        // A character claimed by your own name remains selectable so you can
+        // re-claim it after leaving; other people's claims are disabled.
+        const taken = Boolean(char.claimed_by) && char.claimed_by !== pendingJoin?.name;
         if (taken) {
             item.disabled = true;
         }
         const label = char.description
             ? `${char.name} — ${char.description}`
             : char.name;
-        item.textContent = taken
+        item.textContent = char.claimed_by
             ? `${label} (claimed by ${char.claimed_by})`
             : label;
         if (!taken) {
@@ -802,7 +1194,7 @@ function chooseCharacter(character) {
     if (!pendingJoin) {
         return;
     }
-    const identity = rememberedIdentity(pendingJoin.name);
+    const identity = rememberedIdentity(pendingJoin.name, pendingJoin.invite_code);
     const targetId = identity?.clientId || clientId;
     const reconnectToken = identity?.reconnectToken || (
         savedAuth?.name?.toLowerCase() === pendingJoin.name.toLowerCase()
@@ -879,7 +1271,27 @@ function makeCharacterRow() {
             row.remove();
         }
     });
-    row.append(mine, name, description, remove);
+    const details = document.createElement("details");
+    details.className = "char-card-details";
+    const summary = document.createElement("summary");
+    summary.textContent = "角色卡（性格/风格/示例台词，可留空）";
+    const personality = document.createElement("textarea");
+    personality.className = "character-personality";
+    personality.maxLength = 10000;
+    personality.rows = 2;
+    personality.placeholder = "性格 (personality)";
+    const style = document.createElement("textarea");
+    style.className = "character-style";
+    style.maxLength = 10000;
+    style.rows = 2;
+    style.placeholder = "语言风格 (style)";
+    const example = document.createElement("textarea");
+    example.className = "character-example";
+    example.maxLength = 10000;
+    example.rows = 2;
+    example.placeholder = "示例台词 (example dialogue)";
+    details.append(summary, personality, style, example);
+    row.append(mine, name, description, remove, details);
     elements.characterEditor.appendChild(row);
     return row;
 }
@@ -889,6 +1301,9 @@ function collectCharacters() {
     const characters = rows.map((row) => ({
         name: row.querySelector(".character-name").value.trim(),
         description: row.querySelector(".character-description").value.trim(),
+        personality: row.querySelector(".character-personality").value.trim(),
+        style: row.querySelector(".character-style").value.trim(),
+        example_dialogue: row.querySelector(".character-example").value.trim(),
     }));
     const chosen = elements.characterEditor.querySelector(".character-mine:checked");
     const hostCharacter = chosen
@@ -901,6 +1316,437 @@ elements.addCharacter.addEventListener("click", () => {
     makeCharacterRow();
 });
 
+function makePromptBlockRow(block = {}) {
+    const row = document.createElement("div");
+    row.className = "config-row prompt-block-row";
+    const title = document.createElement("input");
+    title.className = "prompt-block-title";
+    title.maxLength = 80;
+    title.placeholder = "Block title (optional)";
+    title.value = block.title || "";
+    const position = document.createElement("select");
+    position.className = "prompt-block-position";
+    ["system", "scenario", "output"].forEach((value) => {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value;
+        position.appendChild(option);
+    });
+    position.value = ["system", "scenario", "output"].includes(block.position)
+        ? block.position
+        : "output";
+    const enabledLabel = document.createElement("label");
+    enabledLabel.className = "check-label prompt-block-enabled";
+    const enabledCheck = document.createElement("input");
+    enabledCheck.type = "checkbox";
+    enabledCheck.checked = block.enabled !== false;
+    enabledLabel.append(enabledCheck, "on");
+    const content = document.createElement("textarea");
+    content.className = "prompt-block-content";
+    content.maxLength = 10000;
+    content.rows = 3;
+    content.placeholder = "Instruction content";
+    content.value = block.content || "";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "remove-row";
+    remove.textContent = "×";
+    remove.addEventListener("click", () => row.remove());
+    row.append(title, position, enabledLabel, content, remove);
+    elements.promptBlocksEditor.appendChild(row);
+    return row;
+}
+
+function collectPromptBlocks() {
+    return [...elements.promptBlocksEditor.querySelectorAll(".prompt-block-row")]
+        .map((row) => ({
+            title: row.querySelector(".prompt-block-title").value.trim(),
+            position: row.querySelector(".prompt-block-position").value,
+            enabled: row.querySelector(".prompt-block-enabled input").checked,
+            content: row.querySelector(".prompt-block-content").value.trim(),
+        }))
+        .filter((block) => block.content);
+}
+
+function collectSampling() {
+    const sampling = {};
+    const temperature = Number.parseFloat(elements.samplingTemperature.value);
+    const topP = Number.parseFloat(elements.samplingTopP.value);
+    if (Number.isFinite(temperature)) {
+        sampling.temperature = temperature;
+    }
+    if (Number.isFinite(topP)) {
+        sampling.top_p = topP;
+    }
+    return sampling;
+}
+
+elements.addPromptBlock.addEventListener("click", () => makePromptBlockRow());
+
+function makeTimeRuleRow(activity = "", minimum = "", maximum = "") {
+    const row = document.createElement("div");
+    row.className = "config-row time-rule-row";
+    const activityInput = document.createElement("input");
+    activityInput.className = "rule-activity";
+    activityInput.maxLength = 80;
+    activityInput.placeholder = "Activity (e.g. searching a room)";
+    activityInput.value = activity;
+    const minInput = document.createElement("input");
+    minInput.type = "number";
+    minInput.min = 0;
+    minInput.max = 525600;
+    minInput.className = "rule-min";
+    minInput.placeholder = "min";
+    minInput.value = minimum;
+    const maxInput = document.createElement("input");
+    maxInput.type = "number";
+    maxInput.min = 0;
+    maxInput.max = 525600;
+    maxInput.className = "rule-max";
+    maxInput.placeholder = "max";
+    maxInput.value = maximum;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "remove-row";
+    remove.textContent = "×";
+    remove.addEventListener("click", () => row.remove());
+    row.append(activityInput, minInput, maxInput, remove);
+    elements.timeRulesEditor.appendChild(row);
+    return row;
+}
+
+function makeEventRow(event = {}) {
+    const row = document.createElement("div");
+    row.className = "config-row event-row";
+    const name = document.createElement("input");
+    name.className = "event-name";
+    name.maxLength = 80;
+    name.placeholder = "Event name";
+    name.value = event.name || "";
+    const day = document.createElement("input");
+    day.type = "number";
+    day.min = 0;
+    day.max = 100000;
+    day.className = "event-day";
+    day.title = "Day";
+    day.value = event.day ?? 1;
+    const time = document.createElement("input");
+    time.type = "time";
+    time.className = "event-time";
+    time.title = "Time";
+    time.value = event.time || "06:30";
+    const description = document.createElement("input");
+    description.className = "event-description";
+    description.maxLength = 10000;
+    description.placeholder = "What happens (backstage)";
+    description.value = event.description || "";
+    const publicLabel = document.createElement("label");
+    publicLabel.className = "check-label event-public";
+    const publicCheck = document.createElement("input");
+    publicCheck.type = "checkbox";
+    publicCheck.checked = Boolean(event.public);
+    publicCheck.title = "Announce to all players";
+    publicLabel.append(publicCheck, "public");
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "remove-row";
+    remove.textContent = "×";
+    remove.addEventListener("click", () => row.remove());
+    row.append(name, day, time, description, publicLabel, remove);
+    elements.eventsEditor.appendChild(row);
+    return row;
+}
+
+function makeLorebookRow(entry = {}) {
+    const row = document.createElement("div");
+    row.className = "config-row lorebook-row";
+    const title = document.createElement("input");
+    title.className = "lorebook-title";
+    title.maxLength = 80;
+    title.placeholder = "Title (optional)";
+    title.value = entry.title || "";
+    const keys = document.createElement("input");
+    keys.className = "lorebook-keys";
+    keys.maxLength = 1000;
+    keys.placeholder = "Keywords, comma separated";
+    keys.value = (entry.keys || []).join(", ");
+    const content = document.createElement("textarea");
+    content.className = "lorebook-content";
+    content.maxLength = 10000;
+    content.rows = 2;
+    content.placeholder = "Content inserted when a keyword appears";
+    content.value = entry.content || "";
+    const order = document.createElement("input");
+    order.type = "number";
+    order.min = 0;
+    order.max = 10000;
+    order.className = "lorebook-order";
+    order.title = "Insertion order (higher = stronger influence)";
+    order.value = entry.order ?? 0;
+    const constantLabel = document.createElement("label");
+    constantLabel.className = "check-label lorebook-constant";
+    const constantCheck = document.createElement("input");
+    constantCheck.type = "checkbox";
+    constantCheck.checked = Boolean(entry.constant);
+    constantCheck.title = "Always active";
+    constantLabel.append(constantCheck, "always");
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "remove-row";
+    remove.textContent = "×";
+    remove.addEventListener("click", () => row.remove());
+    row.append(title, keys, content, order, constantLabel, remove);
+    elements.lorebookEditor.appendChild(row);
+    return row;
+}
+
+function collectTimeConfig() {
+    if (!elements.timeEnabled.checked) {
+        return { enabled: false };
+    }
+    const [hours, minutes] = (elements.timeStartTime.value || "06:30")
+        .split(":")
+        .map((part) => parseInt(part, 10) || 0);
+    return {
+        enabled: true,
+        start_day: parseInt(elements.timeStartDay.value, 10) || 1,
+        start_minute: hours * 60 + minutes,
+        max_elapsed_minutes: parseInt(elements.timeMaxElapsed.value, 10) || 600,
+        default_elapsed_minutes: parseInt(elements.timeDefaultElapsed.value, 10) || 15,
+    };
+}
+
+function collectTimeRules() {
+    return [...elements.timeRulesEditor.querySelectorAll(".time-rule-row")]
+        .map((row) => ({
+            activity: row.querySelector(".rule-activity").value.trim(),
+            minutes_min: parseInt(row.querySelector(".rule-min").value, 10),
+            minutes_max: parseInt(row.querySelector(".rule-max").value, 10),
+        }))
+        .filter(
+            (rule) =>
+                rule.activity &&
+                Number.isFinite(rule.minutes_min) &&
+                Number.isFinite(rule.minutes_max),
+        );
+}
+
+function collectEvents() {
+    if (!elements.timeEnabled.checked) {
+        return [];
+    }
+    return [...elements.eventsEditor.querySelectorAll(".event-row")]
+        .map((row) => {
+            const [hours, minutes] = (row.querySelector(".event-time").value || "06:30")
+                .split(":")
+                .map((part) => parseInt(part, 10) || 0);
+            return {
+                name: row.querySelector(".event-name").value.trim(),
+                day: parseInt(row.querySelector(".event-day").value, 10) || 0,
+                minute: hours * 60 + minutes,
+                description: row.querySelector(".event-description").value.trim(),
+                public: row.querySelector(".event-public input").checked,
+            };
+        })
+        .filter((event) => event.name && event.description);
+}
+
+function collectLorebook() {
+    return [...elements.lorebookEditor.querySelectorAll(".lorebook-row")]
+        .map((row) => ({
+            title: row.querySelector(".lorebook-title").value.trim(),
+            keys: row
+                .querySelector(".lorebook-keys")
+                .value.split(",")
+                .map((key) => key.trim())
+                .filter(Boolean),
+            content: row.querySelector(".lorebook-content").value.trim(),
+            order: parseInt(row.querySelector(".lorebook-order").value, 10) || 0,
+            constant: row.querySelector(".lorebook-constant input").checked,
+        }))
+        .filter((entry) => entry.content && entry.keys.length);
+}
+
+function minutesToTime(minutes) {
+    const total = Number.isFinite(minutes) ? Math.max(0, Math.min(minutes, 1439)) : 0;
+    const hours = String(Math.floor(total / 60)).padStart(2, "0");
+    const mins = String(total % 60).padStart(2, "0");
+    return `${hours}:${mins}`;
+}
+
+function clearEditor(container) {
+    container.replaceChildren();
+}
+
+function applyScenarioConfig(config) {
+    if (!config || typeof config !== "object" || Array.isArray(config)) {
+        throw new Error("The config file must contain a JSON object.");
+    }
+    // Scalar/text sections: overwrite only when the key is present in the file.
+    if (typeof config.scenario === "string") {
+        elements.scenario.value = config.scenario;
+    }
+    if (typeof config.guidance === "string") {
+        elements.guidance.value = config.guidance;
+    }
+    if (Array.isArray(config.characters)) {
+        const characters = config.characters.filter(
+            (character) => character && typeof character.name === "string" && character.name.trim(),
+        );
+        clearEditor(elements.characterEditor);
+        if (characters.length === 0) {
+            makeCharacterRow();
+        }
+        let hostCharacter = typeof config.host_character === "string" ? config.host_character : "";
+        characters.forEach((character) => {
+            const row = makeCharacterRow();
+            row.querySelector(".character-name").value = character.name;
+            row.querySelector(".character-description").value =
+                typeof character.description === "string" ? character.description : "";
+            row.querySelector(".character-personality").value =
+                typeof character.personality === "string" ? character.personality : "";
+            row.querySelector(".character-style").value =
+                typeof character.style === "string" ? character.style : "";
+            row.querySelector(".character-example").value =
+                typeof character.example_dialogue === "string" ? character.example_dialogue : "";
+            if (hostCharacter && character.name === hostCharacter) {
+                row.querySelector(".character-mine").checked = true;
+                hostCharacter = "";
+            }
+        });
+    }
+    if (config.time_config && typeof config.time_config === "object") {
+        const timeConfig = config.time_config;
+        const enabled = Boolean(timeConfig.enabled);
+        elements.timeEnabled.checked = enabled;
+        elements.timeConfigFields.hidden = !enabled;
+        if (enabled) {
+            elements.timeStartDay.value = Number.isFinite(timeConfig.start_day)
+                ? timeConfig.start_day
+                : 1;
+            elements.timeStartTime.value = minutesToTime(
+                Number.isFinite(timeConfig.start_minute) ? timeConfig.start_minute : 390,
+            );
+            elements.timeMaxElapsed.value = Number.isFinite(timeConfig.max_elapsed_minutes)
+                ? timeConfig.max_elapsed_minutes
+                : 600;
+            elements.timeDefaultElapsed.value = Number.isFinite(
+                timeConfig.default_elapsed_minutes,
+            )
+                ? timeConfig.default_elapsed_minutes
+                : 15;
+        }
+    }
+    // List sections: append the file's rows onto what is already in the form,
+    // so importing a second file no longer wipes the first file's content.
+    (Array.isArray(config.time_rules) ? config.time_rules : []).forEach((rule) => {
+        if (rule && typeof rule.activity === "string") {
+            makeTimeRuleRow(rule.activity, rule.minutes_min ?? "", rule.minutes_max ?? "");
+        }
+    });
+    (Array.isArray(config.events) ? config.events : []).forEach((event) => {
+        if (event && typeof event.name === "string") {
+            makeEventRow({
+                name: event.name,
+                day: event.day ?? 1,
+                time: minutesToTime(event.minute),
+                description: typeof event.description === "string" ? event.description : "",
+                public: Boolean(event.public),
+            });
+        }
+    });
+    (Array.isArray(config.lorebook) ? config.lorebook : []).forEach((entry) => {
+        if (entry && Array.isArray(entry.keys) && entry.keys.length) {
+            makeLorebookRow(entry);
+        }
+    });
+    (Array.isArray(config.prompt_blocks) ? config.prompt_blocks : []).forEach((block) => {
+        if (block && typeof block.content === "string" && block.content.trim()) {
+            makePromptBlockRow(block);
+        }
+    });
+    if (config.sampling && typeof config.sampling === "object") {
+        if (Number.isFinite(config.sampling.temperature)) {
+            elements.samplingTemperature.value = config.sampling.temperature;
+        }
+        if (Number.isFinite(config.sampling.top_p)) {
+            elements.samplingTopP.value = config.sampling.top_p;
+        }
+    }
+    if (typeof config.random_turn_order === "boolean") {
+        elements.randomTurnOrder.checked = config.random_turn_order;
+    }
+}
+
+function exportScenarioConfig() {
+    const { characters, hostCharacter } = collectCharacters();
+    const config = {
+        scenario: elements.scenario.value,
+        guidance: elements.guidance.value,
+        characters,
+        host_character: hostCharacter || "",
+        time_config: collectTimeConfig(),
+        time_rules: collectTimeRules(),
+        events: collectEvents(),
+        lorebook: collectLorebook(),
+        prompt_blocks: collectPromptBlocks(),
+        sampling: collectSampling(),
+        random_turn_order: elements.randomTurnOrder.checked,
+    };
+    const blob = new Blob([JSON.stringify(config, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "scenario-config.json";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+}
+
+elements.loadConfigButton.addEventListener("click", () => {
+    elements.loadConfigInput.click();
+});
+
+elements.loadConfigInput.addEventListener("change", () => {
+    const file = elements.loadConfigInput.files && elements.loadConfigInput.files[0];
+    if (!file) {
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+        try {
+            applyScenarioConfig(JSON.parse(String(reader.result)));
+            elements.hostStatus.textContent = "Config loaded.";
+        } catch (error) {
+            elements.hostStatus.textContent = `Could not load config: ${error.message}`;
+        }
+    };
+    reader.onerror = () => {
+        elements.hostStatus.textContent = "Could not read the config file.";
+    };
+    reader.readAsText(file);
+    elements.loadConfigInput.value = "";
+});
+
+elements.exportConfigButton.addEventListener("click", () => {
+    exportScenarioConfig();
+    elements.hostStatus.textContent = "Config exported.";
+});
+
+elements.timeEnabled.addEventListener("change", () => {
+    elements.timeConfigFields.hidden = !elements.timeEnabled.checked;
+});
+
+elements.addTimeRule.addEventListener("click", () => makeTimeRuleRow());
+elements.addEvent.addEventListener("click", () => makeEventRow());
+elements.addLorebook.addEventListener("click", () => makeLorebookRow());
+elements.editScenarioButton.addEventListener("click", () => {
+    elements.lobbyStep.hidden = true;
+    elements.scenarioStep.hidden = false;
+    elements.hostStatus.textContent = "";
+});
+
 elements.scenarioForm.addEventListener("submit", (event) => {
     event.preventDefault();
     const { characters, hostCharacter } = collectCharacters();
@@ -908,8 +1754,10 @@ elements.scenarioForm.addEventListener("submit", (event) => {
         elements.hostStatus.textContent = "Every character needs a name.";
         return;
     }
-    if (!hostCharacter) {
-        elements.hostStatus.textContent = "Pick the character you will play.";
+    const timeConfig = collectTimeConfig();
+    const events = collectEvents();
+    if (events.length && !timeConfig.enabled) {
+        elements.hostStatus.textContent = "Fixed-time events require the in-game clock.";
         return;
     }
     if (
@@ -917,21 +1765,42 @@ elements.scenarioForm.addEventListener("submit", (event) => {
             scenario: elements.scenario.value.trim(),
             guidance: elements.guidance.value.trim(),
             characters,
-            host_character: hostCharacter,
+            host_character: hostCharacter || "",
+            time_config: timeConfig,
+            time_rules: collectTimeRules(),
+            events,
+            lorebook: collectLorebook(),
+            prompt_blocks: collectPromptBlocks(),
+            sampling: collectSampling(),
+            random_turn_order: elements.randomTurnOrder.checked,
         })
     ) {
-        elements.scenarioForm.querySelector("button").disabled = true;
+        elements.scenarioSubmit.disabled = true;
         elements.hostStatus.textContent = "Generating the scenario...";
+    }
+});
+
+function closeMobileMenu() {
+    if (document.body) {
+        document.body.classList.remove("menu-open");
+    }
+}
+
+elements.mobileMenuButton.addEventListener("click", () => {
+    if (document.body) {
+        document.body.classList.toggle("menu-open");
     }
 });
 
 elements.endGameButton.addEventListener("click", () => {
     if (window.confirm("End this game for every player?")) {
+        closeMobileMenu();
         send("end_game", {});
     }
 });
 
 elements.retryRoundButton.addEventListener("click", () => {
+    closeMobileMenu();
     send("retry_round", {});
 });
 
@@ -947,6 +1816,17 @@ elements.closeRoomButton.addEventListener("click", () => {
         send("close_room", {});
     }
 });
+
+elements.leaveRoomButton.addEventListener("click", leaveRoom);
+
+function setMobileView(view) {
+    elements.grid.classList.toggle("view-chat", view === "chat");
+    elements.viewStory.classList.toggle("active", view === "story");
+    elements.viewChat.classList.toggle("active", view === "chat");
+}
+
+elements.viewStory.addEventListener("click", () => setMobileView("story"));
+elements.viewChat.addEventListener("click", () => setMobileView("chat"));
 
 elements.chatForm.addEventListener("submit", (event) => {
     event.preventDefault();

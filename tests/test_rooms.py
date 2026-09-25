@@ -122,7 +122,7 @@ def test_same_name_allowed_across_rooms_but_not_within_one():
                     receive_until(player_two, "auth_ok")
                     with client.websocket_connect(f"/ws/{uuid4()}") as duplicate:
                         join_room(duplicate, str(uuid4()), code_a, "arxs", "Arxs")
-                        assert "already in use" in duplicate.receive_json()["payload"]["msg"]
+                        assert "already online" in duplicate.receive_json()["payload"]["msg"]
 
 
 def test_joining_an_unknown_room_reports_a_clear_error():

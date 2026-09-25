@@ -362,8 +362,8 @@ def test_boundary_guard_preserves_valid_prose(outcome):
     assert result.player_resolutions["Arxs"] == outcome
 
 
-def test_opening_without_all_player_names_is_rejected_before_remembering():
-    """A generic scenario cannot silently replace the party's introductions."""
+def test_opening_falls_back_to_mentioning_missing_names():
+    """A missing name never fails the start; the opening is patched instead."""
 
     async def run():
         client = FakeClient(
@@ -373,13 +373,15 @@ def test_opening_without_all_player_names_is_rejected_before_remembering():
         )
         manager = LLMContextManager(client)
         manager.set_genesis("A gate blocks the road.")
-        with pytest.raises(LLMResolutionError, match="introduce every player"):
-            await manager.generate_start_state(
-                [Character(name="Alice"), Character(name="Bob")],
-                {"Alice": "A"},
-            )
-        assert manager.history == []
+        result = await manager.generate_start_state(
+            [Character(name="Alice"), Character(name="Bob")],
+            {"Alice": "A"},
+        )
+        assert "Alice" in result.global_narrative
+        assert "Bob" in result.global_narrative
+        assert "Also present in the story" in result.global_narrative
+        assert len(manager.history) == 2
         assert len(client.calls) == 2
-        assert "Bob" in client.calls[-1]["messages"][-1]["content"]
+        assert "MISSING from the narrative" in client.calls[-1]["messages"][-1]["content"]
 
     asyncio.run(run())

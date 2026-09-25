@@ -13,3 +13,5 @@ certs/key.pem
 pytest-output.txt
 .debug/
 benchmarks/
+.rooms/
+.DS_Store
