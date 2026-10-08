@@ -523,10 +523,11 @@ class LLMContextManager:
                 "report it as an integer in time_elapsed_minutes. Parallel actions in "
                 "different locations count only the longest single line, not the sum. Use the "
                 "reference durations from the configured time rules when they fit; resting "
-                "or sleeping can take hours. Begin the global_narrative with the current time "
-                "label and the end-of-round time it produces, e.g. '当前时间：Day 1 06:30, "
-                "耗时约40分钟, 当前时间：Day 1 07:10', computed as the authoritative start "
-                "time plus time_elapsed_minutes.\n\n"
+                "or sleeping can take hours. End the global_narrative with the end-of-round "
+                "time it produces, e.g. '耗时约40分钟，当前时间：Day 1 07:10', computed as the "
+                "authoritative start time plus time_elapsed_minutes. Report the elapsed minutes "
+                "and the resulting end time only; never restate the starting time at the "
+                "beginning or anywhere else.\n\n"
             )
         roll_context = ""
         if dice_results:

@@ -320,3 +320,24 @@ def test_revised_scenario_releases_removed_characters(tmp_path):
         await engine.shutdown()
 
     asyncio.run(run())
+
+
+def test_time_instruction_asks_for_the_end_time_only():
+    """The round prompt must not request a leading start-time label."""
+    from core.config import settings
+    from logic.llm_manager import LLMContextManager
+    from test_priority_one_llm import FakeClient
+
+    settings.llm.provider = "openai"
+    settings.llm.structured_outputs = True
+    client = FakeClient()
+    manager = LLMContextManager(client)
+
+    async def run():
+        await manager.generate_resolution({"Alice": "waits"}, current_time="Day 1 08:00")
+        prompt = client.calls[0]["messages"][-1]["content"]
+        assert "耗时约40分钟，当前时间：Day 1 07:10" in prompt
+        assert "Begin the global_narrative" not in prompt
+        assert "当前时间：Day 1 06:30" not in prompt
+
+    asyncio.run(run())
