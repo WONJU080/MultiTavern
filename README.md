@@ -6,7 +6,7 @@
 
 ## 玩法
 
-1. **建房**：房主打开游戏页面，选择「创建房间」，输入自己的名字（若服务器要求，还需输入 admin 密码），得到一段邀请码。
+1. **建房**：房主打开游戏页面，选择「创建房间」，输入自己的名字，然后二选一提供 AI 接口：**填自己的 API Key**（加密保存在服务器，所有 AI 调用都走自己的 key），或**借用服主的 API**（受服务器名额限制，默认同时最多 2 间，满额时提示改用自带 key）。得到一段邀请码。
 2. **设定剧情**：房主在表单里配置本局内容，之后也可以随时在房间里再改：
    - **角色池**：创建角色，每个角色可填名字、描述、性格、文风、台词示例；未被认领的角色由 AI 托管扮演。
    - **剧情设定**：输入剧情设定与（仅房主可见的）主持私密指引，AI 据此生成标题与开场。
@@ -25,11 +25,11 @@
 
 不用手写 JSON，可以交给 AI 助手代劳：
 
-1. 把仓库里的 [`examples/st-adaptation-guide.md`](examples/st-adaptation-guide.md)（一份讲清本项目配置格式的说明书）连同你的剧本或现成的 SillyTavern 文件，一起喂给你的 agent。
-2. 让它读完说明书后，把素材改写成一个「多合一导入文件」——里面同时包含剧情（`scenario`）、GM 私密手册（`guidance`）、角色卡（`characters`）、世界书（`lorebook`）、提示块与采样预设（`prompt_blocks` / `sampling`）。
+1. 把仓库里的 [`examples/plot-to-config-prompt.md`](examples/plot-to-config-prompt.md)（一份可直接发给 AI 的转换指令）连同你的素材（SillyTavern 剧情卡、世界书、预设，或口述的剧情概要）一起喂给你的 agent。
+2. 它会输出一个「多合一导入文件」——包含剧情（`scenario`）、GM 私密手册（`guidance`）、世界书（`lorebook`）、提示块与采样预设（`prompt_blocks` / `sampling`）、时间与事件等。角色池不由它生成，建房时在表单里另行创建与认领。
 3. 把生成的 JSON 存成 `.json` 文件，建房时点「导入配置」即可复用整局设定（导入是合并，不会清空已填内容）。
 
-说明书里含完整的字段说明、SillyTavern 到本项目的映射表，以及可直接复制的 agent 提示词模板。
+该指令只转换剧情与预设、不产出角色卡；文件内附完整字段说明与使用方式。
 
 ## 服务器配置须知
 
@@ -44,11 +44,15 @@
     structured_outputs: false
   ```
 - **常用配置**（`config.yaml`）：
-  - `server.admin_password`：建房所需的密码。公网开放时建议设置，防止陌生人消耗你的 API 余额。
+  - `server.admin_password`：**只用于保护 `/admin/rooms` 运维面板**，与建房无关。
+  - `server.borrowed_room_limit`：允许多少个房间同时「借用服主的 API」（默认 2，设 0 禁止）。
+  - `server.max_rooms`：可选的房间总数上限。
+  - `server.allowed_llm_hosts`：可选的白名单，限制房主自定义的 LLM endpoint 域名。
   - `server.max_characters`：每个房间的角色池上限。
   - `server.empty_room_timeout_seconds` / `server.abandoned_room_timeout_seconds`：设为 `null` 表示房间永不因空闲被自动删除。
-- **运维面板**：访问 `https://<服务器地址>/admin/rooms`，输入 admin 密码后可查看所有运行中的房间并关闭它们。
-- 游戏的所有 AI 调用都走你配置的 API，会消耗余额，请注意。
+- **API Key 安全**：房主自带的 key 以密文存盘，加密密钥环默认在 `certs/keyring.key`（首次运行自动生成，不纳入版本库，注意备份）。密钥环丢失时相关房间会暂停并请房主重填，绝不会偷偷改用你的 key。
+- **运维面板**：访问 `https://<服务器地址>/admin/rooms`，输入 admin 密码后可查看所有运行中的房间（含各房间使用的是「服主」还是「自带」API）并关闭它们。
+- 借用模式下，游戏的所有 AI 调用都走你配置的 API，会消耗余额；自带 key 的房间消耗房主自己的余额。
 
 ## 说明
 
