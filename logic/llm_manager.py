@@ -69,6 +69,10 @@ class LLMOutputTruncatedError(LLMResolutionError):
     """The model output hit its token cap; retrying with the same cap will not help."""
 
 
+class LLMKeyRequiredError(LLMResolutionError):
+    """The room has no usable host API key; inference stays blocked until one is provided."""
+
+
 @lru_cache(maxsize=32)
 def participant_schema(
     base: type[BaseModel], names: tuple[str, ...], allow_hidden: bool = False
@@ -120,18 +124,32 @@ def participant_schema(
 class LLMContextManager:
     """Keep immutable genesis, durable memory and recent rounds within a budget."""
 
-    def __init__(self, client: AsyncOpenAI | None = None) -> None:
-        """Initialize the manager with an optional client and configured context."""
+    def __init__(
+        self,
+        client: AsyncOpenAI | None = None,
+        llm_config: Any | None = None,
+    ) -> None:
+        """Initialize the manager with an optional client and per-room configuration.
+
+        Per-room configuration overrides the server-wide settings for everything a
+        room's inference needs (credentials, endpoint, model, budgets). When none
+        is supplied the globally configured settings remain in effect.
+        """
         self.client = (
             client.with_options(max_retries=0) if isinstance(client, AsyncOpenAI) else client
         )
+        # The room's effective configuration; defaults to the live global settings.
+        self.llm = llm_config if llm_config is not None else settings.llm
+        # A room that lost its stored key must not fall back to the server's own
+        # credentials; every inference path raises until a key is supplied.
+        self.key_required = False
         self._http: httpx.AsyncClient | None = None
         # A configured value is the fallback; successful llama.cpp discovery takes precedence.
-        self.context_window_size = settings.llm.context_window_size
+        self.context_window_size = self.llm.context_window_size
         self.context_window_source = "configured fallback"
         self._retained_measurement = None
-        self._context_discovered = settings.llm.provider != "compatible"
-        self.system_prompt = {"role": "system", "content": settings.llm.system_prompt}
+        self._context_discovered = self.llm.provider != "compatible"
+        self.system_prompt = {"role": "system", "content": self.llm.system_prompt}
         # Local model tokenization is obtained from the backend, never guessed from
         # an unrelated tiktoken encoding. Unknown models use a weighted text estimate.
         self.encoding = None
@@ -141,7 +159,7 @@ class LLMContextManager:
         self._request_counts: OrderedDict = OrderedDict()
         self._template_identity = "undiscovered"
         self._last_response_text: str | None = None
-        self.system_prompt_tokens = self._count_tokens(settings.llm.system_prompt)
+        self.system_prompt_tokens = self._count_tokens(self.llm.system_prompt)
         self.genesis_state: dict[str, str] | None = None
         self.history: list[dict[str, str]] = []
         self.memory: dict[str, str] | None = None
@@ -162,17 +180,52 @@ class LLMContextManager:
         self.last_round_error: str | None = None
         self._round_started: float | None = None
 
-    @staticmethod
-    def _create_client() -> AsyncOpenAI:
+    @property
+    def request_timeout_seconds(self) -> float:
+        """The room's configured per-request timeout."""
+        return self.llm.request_timeout_seconds
+
+    def apply_llm_config(self, llm_config: Any) -> None:
+        """Adopt a room's configuration and clear derived state.
+
+        Called before the manager has served any request, so no live client is
+        discarded here; the next inference builds one from the new configuration.
+        """
+        self.llm = llm_config
+        self.key_required = False
+        self.context_window_size = llm_config.context_window_size
+        self.context_window_source = "configured fallback"
+        self._context_discovered = llm_config.provider != "compatible"
+        self.system_prompt = {"role": "system", "content": llm_config.system_prompt}
+        self.system_prompt_tokens = self._count_tokens(llm_config.system_prompt)
+        self.last_token_usage = self.system_prompt_tokens + 3
+        self.encoding = None
+        self._encoding_loaded = False
+        self.token_count_method = "conservative weighted text estimate"
+        self._text_counts = OrderedDict()
+        self._request_counts = OrderedDict()
+        self._template_identity = "undiscovered"
+        self.client = None
+        self._http = None
+
+    def require_key(self) -> None:
+        """Mark this room as blocked until a usable host key is supplied."""
+        self.key_required = True
+
+    def _create_client(self) -> AsyncOpenAI:
         """Create either a direct OpenAI client or a local compatible client."""
+        if self.key_required:
+            raise LLMKeyRequiredError(
+                "This room has no usable API key. Only the host can provide one."
+            )
         client_options: dict[str, Any] = {
-            "api_key": settings.llm.api_key,
-            "timeout": settings.llm.request_timeout_seconds,
+            "api_key": self.llm.api_key,
+            "timeout": self.llm.request_timeout_seconds,
             "max_retries": 0,  # Each retry is measured explicitly below.
         }
-        if settings.llm.provider == "compatible":
-            client_options["base_url"] = settings.llm.endpoint
-        if settings.llm.debug_raw_responses:
+        if self.llm.provider == "compatible":
+            client_options["base_url"] = self.llm.endpoint
+        if self.llm.debug_raw_responses:
             client_options["http_client"] = DefaultAsyncHttpxClient(
                 event_hooks={"response": [RawResponseLogger().capture]}
             )
@@ -264,7 +317,7 @@ class LLMContextManager:
         constant entries first and higher insertion orders last, and capped by
         the configured token budget.
         """
-        depth = settings.llm.lorebook_scan_depth
+        depth = self.llm.lorebook_scan_depth
         recent = " ".join(
             message.get("content", "") for message in self.history[-depth:] if message
         )
@@ -286,7 +339,7 @@ class LLMContextManager:
         matched.sort(key=lambda entry: (not entry.constant, -entry.order))
         chosen: list[Any] = []
         used = 0
-        budget = settings.llm.lorebook_max_tokens
+        budget = self.llm.lorebook_max_tokens
         for entry in matched:
             cost = self._count_tokens(entry.content) + len(entry.keys)
             if used + cost > budget:
@@ -541,8 +594,8 @@ class LLMContextManager:
     def _fixed_messages(self, kind: str = "round") -> list[dict[str, str]]:
         """Return the immutable prefix messages for every request."""
         system = self.system_prompt
-        if kind == "dice" and settings.llm.planner_system_prompt:
-            system = {"role": "system", "content": settings.llm.planner_system_prompt}
+        if kind == "dice" and self.llm.planner_system_prompt:
+            system = {"role": "system", "content": self.llm.planner_system_prompt}
         system_blocks = self._enabled_blocks("system")
         scenario_blocks = self._enabled_blocks("scenario")
         messages: list[dict[str, str]] = [system]
@@ -571,9 +624,9 @@ class LLMContextManager:
     def _output_limit(self, kind: str) -> int:
         """Return the configured output token cap for a request kind."""
         if kind == "title":
-            return min(128, settings.llm.initial_output_tokens)
+            return min(128, self.llm.initial_output_tokens)
         cap_kind = "summary" if kind == "summary_audit" else kind
-        return getattr(settings.llm, f"{cap_kind}_output_tokens")
+        return getattr(self.llm, f"{cap_kind}_output_tokens")
 
     def _schema_text(self, schema: type[BaseModel]) -> str:
         """Return the compact JSON schema text for a response model."""
@@ -587,7 +640,7 @@ class LLMContextManager:
 
     def _fits(self, count: int, kind: str) -> bool:
         """Return whether a token count fits within the context budget."""
-        return count + self._output_limit(kind) + settings.llm.token_safety_margin <= (
+        return count + self._output_limit(kind) + self.llm.token_safety_margin <= (
             self.context_window_size
         )
 
@@ -595,20 +648,19 @@ class LLMContextManager:
         """Return a lazily-created HTTP client for backend discovery."""
         if self._http is None:
             self._http = httpx.AsyncClient(
-                timeout=2.0, headers={"Authorization": f"Bearer {settings.llm.api_key}"}
+                timeout=2.0, headers={"Authorization": f"Bearer {self.llm.api_key}"}
             )
         return self._http
 
     def _backend_base(self) -> str:
         """Return the backend base URL without a trailing /v1."""
-        base = settings.llm.endpoint.rstrip("/")
+        base = self.llm.endpoint.rstrip("/")
         return base[:-3] if base.endswith("/v1") else base
 
-    @staticmethod
-    def _template_options() -> dict[str, Any]:
+    def _template_options(self) -> dict[str, Any]:
         """Use the same explicit llama.cpp template options for counting and generation."""
-        if settings.llm.provider == "compatible" and settings.llm.enable_thinking is not None:
-            return {"chat_template_kwargs": {"enable_thinking": settings.llm.enable_thinking}}
+        if self.llm.provider == "compatible" and self.llm.enable_thinking is not None:
+            return {"chat_template_kwargs": {"enable_thinking": self.llm.enable_thinking}}
         return {}
 
     async def _input_tokens(
@@ -616,10 +668,10 @@ class LLMContextManager:
     ) -> int:
         """Reuse bounded counts for identical formatted requests and tokenizer identity."""
         identity = (
-            settings.llm.provider,
-            settings.llm.endpoint,
-            settings.llm.model_name,
-            settings.llm.tokenizer_encoding,
+            self.llm.provider,
+            self.llm.endpoint,
+            self.llm.model_name,
+            self.llm.tokenizer_encoding,
             self._template_identity,
             self._template_options(),
             self._schema_text(schema) if schema is not None else None,
@@ -643,17 +695,17 @@ class LLMContextManager:
         self, messages: list[dict[str, str]], schema: type[BaseModel] | None
     ) -> int:
         """Count input tokens using the backend tokenizer or a conservative estimate."""
-        if settings.llm.provider == "openai" and not self._encoding_loaded:
+        if self.llm.provider == "openai" and not self._encoding_loaded:
             self._encoding_loaded = True
             try:
-                known_encoding = tiktoken.encoding_name_for_model(settings.llm.model_name)
-                if settings.llm.tokenizer_encoding == known_encoding:
+                known_encoding = tiktoken.encoding_name_for_model(self.llm.model_name)
+                if self.llm.tokenizer_encoding == known_encoding:
                     self.encoding = await asyncio.to_thread(tiktoken.get_encoding, known_encoding)
                     self.token_count_method = "model tokenizer + estimated framing/schema allowance"
             except (KeyError, ValueError, OSError):
                 # Unknown/mismatched encodings retain the conservative weighted estimate.
                 self.encoding = None
-        if settings.llm.provider == "compatible":
+        if self.llm.provider == "compatible" and not self.key_required:
             try:
                 http = await self._http_client()
                 rendered = await http.post(
@@ -761,7 +813,7 @@ class LLMContextManager:
             *(self.history if include_history else []),
             request_prompt,
         ]
-        for repair in range(settings.llm.max_retries + 1):
+        for repair in range(self.llm.max_retries + 1):
             try:
                 result = await self._parse(messages, schema, kind, repair_attempt=repair)
                 self._check_semantics(result, expected_names, title_required)
@@ -780,7 +832,7 @@ class LLMContextManager:
                             if name.casefold() not in result.global_narrative.casefold()
                         ]
                         if missing:
-                            if repair == settings.llm.max_retries:
+                            if repair == self.llm.max_retries:
                                 # Deterministic fallback: never fail the start over names.
                                 result = result.model_copy(
                                     update={
@@ -801,7 +853,7 @@ class LLMContextManager:
                 logger.warning(
                     "LLM %s output validation failed (repair=%d): %s", kind, repair, str(exc)
                 )
-                if repair == settings.llm.max_retries or isinstance(
+                if repair == self.llm.max_retries or isinstance(
                     exc, (LLMBackendUnavailableError, LLMOutputTruncatedError)
                 ):
                     raise
@@ -1007,8 +1059,8 @@ class LLMContextManager:
                 "Request exceeds the context budget; history and durable memory were preserved."
             )
         try:
-            async with asyncio.timeout(settings.llm.request_timeout_seconds):
-                for attempt in range(settings.llm.max_retries + 1):
+            async with asyncio.timeout(self.llm.request_timeout_seconds):
+                for attempt in range(self.llm.max_retries + 1):
                     try:
                         return await self._parse_attempt(
                             messages, schema, kind, count, attempt, repair_attempt
@@ -1021,7 +1073,7 @@ class LLMContextManager:
                             or (status is not None and status >= 500)
                             or type(cause).__name__ in ("APIConnectionError", "APITimeoutError")
                         )
-                        if not transient or attempt == settings.llm.max_retries:
+                        if not transient or attempt == self.llm.max_retries:
                             raise
                         logger.info("Retrying LLM request kind=%s attempt=%d", kind, attempt + 2)
                         await asyncio.sleep(min(0.5 * 2**attempt, 8.0))
@@ -1043,12 +1095,12 @@ class LLMContextManager:
         started = perf_counter()
         response = None
         error = None
-        cap_key = "max_tokens" if settings.llm.provider == "compatible" else "max_completion_tokens"
+        cap_key = "max_tokens" if self.llm.provider == "compatible" else "max_completion_tokens"
         try:
-            async with asyncio.timeout(settings.llm.request_timeout_seconds):
-                if settings.llm.structured_outputs:
+            async with asyncio.timeout(self.llm.request_timeout_seconds):
+                if self.llm.structured_outputs:
                     response = await self.client.beta.chat.completions.parse(
-                        model=settings.llm.model_name,
+                        model=self.llm.model_name,
                         messages=messages,
                         response_format=schema,
                         **(
@@ -1078,7 +1130,7 @@ class LLMContextManager:
                         f"with no extra text or markdown:\n{self._schema_text(schema)}"
                     )
                     response = await self.client.chat.completions.create(
-                        model=settings.llm.model_name,
+                        model=self.llm.model_name,
                         messages=[*messages[:-1], last],
                         response_format={"type": "json_object"},
                         **{cap_key: self._output_limit(kind)},
@@ -1178,11 +1230,11 @@ class LLMContextManager:
                 messages = [*self._fixed_messages(kind), *self.history, prompt]
                 count = await self._input_tokens(messages, schema)
                 fits = self._fits(count, kind)
-                history_limit = settings.llm.history_round_limit
+                history_limit = self.llm.history_round_limit
                 checkpoint_due = history_limit is not None and len(self.history) > 2 * history_limit
                 target_fits = (
-                    count + self._output_limit(kind) + settings.llm.token_safety_margin
-                    <= self.context_window_size * settings.llm.compaction_target_fraction
+                    count + self._output_limit(kind) + self.llm.token_safety_margin
+                    <= self.context_window_size * self.llm.compaction_target_fraction
                 )
                 if (
                     fits
@@ -1301,7 +1353,7 @@ class LLMContextManager:
                     raise LLMResolutionError(
                         "Summary changed durable facts; original memory retained."
                     )
-                memory_cap = int(self.context_window_size * settings.llm.memory_budget_fraction)
+                memory_cap = int(self.context_window_size * self.llm.memory_budget_fraction)
                 if self._context_size([memory]) > memory_cap:
                     memory = await self._recompress_memory(memory, memory_cap, summary_schema)
                 self.memory = memory
@@ -1411,7 +1463,7 @@ class LLMContextManager:
 
     async def discover_context_window(self) -> None:
         """Discover the backend context window size when available."""
-        if self._context_discovered or settings.llm.provider != "compatible":
+        if self._context_discovered or self.llm.provider != "compatible" or self.key_required:
             return
         try:
             http = await self._http_client()

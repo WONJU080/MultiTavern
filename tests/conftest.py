@@ -25,12 +25,17 @@ def isolated_working_directory(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def isolated_settings(monkeypatch):
+def isolated_settings(monkeypatch, tmp_path):
     """Replace the global settings with isolated test values."""
     monkeypatch.setattr(
         settings,
         "server",
-        ServerConfig(admin_password=None, disconnect_grace_seconds=0.0),
+        ServerConfig(
+            admin_password=None,
+            disconnect_grace_seconds=0.0,
+            borrowed_room_limit=1000,
+            keyring_path=str(tmp_path / "keyring.key"),
+        ),
     )
     monkeypatch.setattr(
         settings,

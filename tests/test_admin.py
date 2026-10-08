@@ -28,7 +28,7 @@ def test_admin_panel_requires_password_and_lists_and_closes_rooms():
         response = client.get("/admin/rooms")
         assert "运行中的房间" in response.text
         with client.websocket_connect(f"/ws/{host_id}") as host:
-            create_room(host, host_id, "Host", admin_password="secret-admin")
+            create_room(host, host_id, "Host")
             code = receive_until(host, "auth_ok")["payload"]["invite_code"]
         response = client.get("/admin/rooms")
         assert code in response.text
@@ -68,7 +68,7 @@ def test_admin_panel_links_to_room_transcripts():
         )
         client.cookies.set("anyworld_admin", response.cookies["anyworld_admin"])
         with client.websocket_connect(f"/ws/{host_id}") as host:
-            create_room(host, host_id, "Host", admin_password="secret-admin")
+            create_room(host, host_id, "Host")
             code = receive_until(host, "auth_ok")["payload"]["invite_code"]
             host.send_json(
                 {

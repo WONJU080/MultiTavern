@@ -20,7 +20,11 @@ from core.schemas import (
 )
 from logic.dice import roll_d100
 from logic.game_clock import GameClock
-from logic.llm_manager import LLMBackendUnavailableError, LLMResolutionError
+from logic.llm_manager import (
+    LLMBackendUnavailableError,
+    LLMKeyRequiredError,
+    LLMResolutionError,
+)
 from logic.lobby import CURRENT_OWNER, LobbyMixin
 from logic.models import EventSender, GameState, Player, ResolutionManager
 from logic.presentation import name_resolution
@@ -176,7 +180,10 @@ class GameEngine(LobbyMixin):
                 await self.sender.broadcast_global(
                     ServerEvent(type="dm_thinking", payload={"active": True})
                 )
-            async with asyncio.timeout(settings.llm.request_timeout_seconds * 3):
+            room_timeout = getattr(
+                self.resolver, "request_timeout_seconds", settings.llm.request_timeout_seconds
+            )
+            async with asyncio.timeout(room_timeout * 3):
                 await work(epoch)
             LOGGER.info(
                 "Inference job finished generation=%d current=%s state=%s",
@@ -197,6 +204,10 @@ class GameEngine(LobbyMixin):
                 if isinstance(exc, LLMBackendUnavailableError)
                 else ""
             )
+            if isinstance(exc, LLMKeyRequiredError):
+                connection_hint = (
+                    "This room has no usable API key. The host can provide one to continue. "
+                )
             async with self.effects_lock:
                 async with self.lock:
                     if not self._job_current(epoch):

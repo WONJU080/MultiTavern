@@ -67,8 +67,31 @@
       <input id="name-input" maxlength="40" required autocomplete="nickname">
       <label for="invite-input" id="invite-label">Invite code</label>
       <input id="invite-input" maxlength="16" autocomplete="off" placeholder="ABC-123">
-      <label for="password-input" id="password-label" hidden>Admin password (if required)</label>
-      <input id="password-input" type="password" maxlength="200" autocomplete="current-password" hidden>
+      <fieldset id="llm-fields" hidden>
+        <legend>AI 接口（建房必选）</legend>
+        <label class="check-label"><input type="radio" name="llm-mode" id="llm-mode-own" checked>
+          使用我自己的 API Key</label>
+        <label class="check-label"><input type="radio" name="llm-mode" id="llm-mode-borrow">
+          借用服主的 API（名额有限）</label>
+        <div id="llm-own-fields">
+          <label for="api-key-input">API Key</label>
+          <input id="api-key-input" type="password" maxlength="512" autocomplete="off"
+            placeholder="sk-...">
+          <details class="config-section">
+            <summary>高级：自定义服务商 / endpoint / 模型（可选）</summary>
+            <label for="llm-provider">provider</label>
+            <select id="llm-provider">
+              <option value="">默认（跟随服务器）</option>
+              <option value="compatible">compatible（OpenAI 兼容接口）</option>
+              <option value="openai">openai（官方接口）</option>
+            </select>
+            <label for="llm-endpoint">endpoint</label>
+            <input id="llm-endpoint" maxlength="2048" autocomplete="off" placeholder="https://…/v1">
+            <label for="llm-model">model</label>
+            <input id="llm-model" maxlength="200" autocomplete="off" placeholder="例如 deepseek-chat">
+          </details>
+        </div>
+      </fieldset>
       <button type="submit" id="login-submit">Enter</button>
       <p id="login-error" class="error" role="alert"></p>
       <div id="join-step" hidden>
@@ -190,13 +213,23 @@
       <button type="button" id="character-card-close" class="secondary">Close</button>
     </form>
   </div>
+  <div id="key-required-modal" class="modal" role="dialog" aria-modal="true" hidden>
+    <form id="key-required-form" class="modal-card">
+      <h2>需要 API Key</h2>
+      <p class="config-hint">这个房间存储的 API Key 无法解密（可能是服务器密钥环变更或文件损坏）。请房主重新填入 Key，房间才能继续推理。</p>
+      <label for="key-required-input">API Key</label>
+      <input id="key-required-input" type="password" maxlength="512" autocomplete="off" required>
+      <button type="submit">提交</button>
+      <p id="key-required-error" class="error" role="alert"></p>
+    </form>
+  </div>
   <button id="end-game-button" type="button" hidden>End game</button>
   <button id="retry-round-button" type="button" hidden>Retry paused round</button>
   <button id="leave-room-button" type="button" hidden>Leave room</button>
   <button id="character-card-button" type="button" hidden>我的角色卡</button>
   <button id="mobile-menu-button" type="button" hidden aria-label="Menu">⋯</button>
   <div id="connection-status" role="status">Connecting...</div>
-  <script src="/static/js/app.js?v=rooms-19"></script>
+  <script src="/static/js/app.js?v=rooms-20"></script>
 </body>
 
 </html>

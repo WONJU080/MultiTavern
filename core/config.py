@@ -55,6 +55,10 @@ class ServerConfig(BaseModel):
     port: int = Field(default=4141, ge=1, le=65_535)
     admin_password: str | None = Field(default=None, min_length=1)
     max_characters: int = Field(default=6, ge=1, le=100)
+    max_rooms: int | None = Field(default=None, ge=1, le=10_000)
+    borrowed_room_limit: int = Field(default=2, ge=0, le=1_000)
+    allowed_llm_hosts: list[str] | None = None
+    keyring_path: str = Field(default="certs/keyring.key", min_length=1)
     max_pending_connections: int = Field(default=32, ge=1, le=1_000)
     auth_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
     max_auth_attempts: int = Field(default=3, ge=1, le=10)

@@ -108,8 +108,14 @@ const elements = {
     name: document.getElementById("name-input"),
     invite: document.getElementById("invite-input"),
     inviteLabel: document.getElementById("invite-label"),
-    password: document.getElementById("password-input"),
-    passwordLabel: document.getElementById("password-label"),
+    llmFields: document.getElementById("llm-fields"),
+    llmModeOwn: document.getElementById("llm-mode-own"),
+    llmModeBorrow: document.getElementById("llm-mode-borrow"),
+    llmOwnFields: document.getElementById("llm-own-fields"),
+    apiKey: document.getElementById("api-key-input"),
+    llmProvider: document.getElementById("llm-provider"),
+    llmEndpoint: document.getElementById("llm-endpoint"),
+    llmModel: document.getElementById("llm-model"),
     modeCreate: document.getElementById("mode-create"),
     modeJoin: document.getElementById("mode-join"),
     loginSubmit: document.getElementById("login-submit"),
@@ -183,6 +189,10 @@ const elements = {
     ccPersonality: document.getElementById("character-card-personality"),
     ccStyle: document.getElementById("character-card-style"),
     ccExample: document.getElementById("character-card-example"),
+    keyRequiredModal: document.getElementById("key-required-modal"),
+    keyRequiredForm: document.getElementById("key-required-form"),
+    keyRequiredInput: document.getElementById("key-required-input"),
+    keyRequiredError: document.getElementById("key-required-error"),
     mobileMenuButton: document.getElementById("mobile-menu-button"),
     viewStory: document.getElementById("view-story"),
     viewChat: document.getElementById("view-chat"),
@@ -458,6 +468,7 @@ function roomWasClosed(message) {
     elements.hostModal.hidden = true;
     elements.characterCardButton.hidden = true;
     elements.characterCardModal.hidden = true;
+    elements.keyRequiredModal.hidden = true;
     ownCharacterCard = null;
     elements.loginModal.hidden = false;
     elements.loginError.textContent = message;
@@ -481,6 +492,7 @@ function wasRemoved(message) {
     elements.skipVoteBox.hidden = true;
     elements.characterCardButton.hidden = true;
     elements.characterCardModal.hidden = true;
+    elements.keyRequiredModal.hidden = true;
     ownCharacterCard = null;
     elements.loginModal.hidden = false;
     elements.loginError.textContent = message;
@@ -521,6 +533,7 @@ function leaveRoom() {
     elements.skipVoteBox.hidden = true;
     elements.characterCardButton.hidden = true;
     elements.characterCardModal.hidden = true;
+    elements.keyRequiredModal.hidden = true;
     ownCharacterCard = null;
     elements.loginModal.hidden = false;
     elements.loginError.textContent = "You left the room. It is still running; rejoin with the invite code.";
@@ -802,6 +815,18 @@ function handleMessage(message) {
         elements.joinStep.hidden = true;
         applySnapshot(payload);
         showInviteCode(payload.invite_code);
+        if (payload.needs_key && isHost) {
+            elements.keyRequiredModal.hidden = false;
+        }
+    } else if (type === "key_updated") {
+        elements.keyRequiredModal.hidden = true;
+        elements.keyRequiredError.textContent = "";
+        appendText(
+            elements.chatMessages,
+            `System: ${payload.msg || "API Key updated."}`,
+            "chat-entry",
+            MAX_CHAT_ENTRIES,
+        );
     } else if (type === "room_info") {
         renderCharacterPicker(payload);
     } else if (type === "history_chunk") {
@@ -937,6 +962,9 @@ function handleMessage(message) {
         elements.scenarioSubmit.disabled = false;
     } else if (type === "error") {
         showError(payload.msg || "Unknown server error.");
+        if (!elements.keyRequiredModal.hidden) {
+            elements.keyRequiredError.textContent = payload.msg || "Unknown server error.";
+        }
         elements.scenarioSubmit.disabled = false;
         elements.startButton.disabled = false;
         if (payload.state) {
@@ -1036,72 +1064,6 @@ if (document.addEventListener) {
 
 connectSocket();
 
-function fallbackSha256(value) {
-    const rightRotate = (word, amount) => (word >>> amount) | (word << (32 - amount));
-    const maxWord = 2 ** 32;
-    const words = [];
-    const hash = [];
-    const constants = [];
-    const composite = {};
-    let primeCounter = 0;
-    for (let candidate = 2; primeCounter < 64; candidate += 1) {
-        if (!composite[candidate]) {
-            for (let multiple = candidate * candidate; multiple < 313; multiple += candidate) {
-                composite[multiple] = true;
-            }
-            if (primeCounter < 8) hash[primeCounter] = (candidate ** 0.5 * maxWord) | 0;
-            constants[primeCounter] = (candidate ** (1 / 3) * maxWord) | 0;
-            primeCounter += 1;
-        }
-    }
-    const encoded = unescape(encodeURIComponent(value));
-    for (let index = 0; index < encoded.length; index += 1) {
-        words[index >> 2] |= encoded.charCodeAt(index) << (3 - (index % 4)) * 8;
-    }
-    words[encoded.length >> 2] |= 0x80 << (3 - (encoded.length % 4)) * 8;
-    words[((encoded.length + 8) >> 6) * 16 + 15] = encoded.length * 8;
-    for (let block = 0; block < words.length; block += 16) {
-        const schedule = words.slice(block, block + 16);
-        const oldHash = hash.slice();
-        for (let index = 0; index < 64; index += 1) {
-            const w15 = schedule[index - 15];
-            const w2 = schedule[index - 2];
-            const a = hash[0];
-            const e = hash[4];
-            const temp1 = hash[7] + (rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25))
-                + ((e & hash[5]) ^ (~e & hash[6])) + constants[index]
-                + (schedule[index] = index < 16 ? (schedule[index] || 0) :
-                    (schedule[index - 16] + (rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15 >>> 3))
-                    + schedule[index - 7] + (rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2 >>> 10))) | 0);
-            const temp2 = (rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22))
-                + ((a & hash[1]) ^ (a & hash[2]) ^ (hash[1] & hash[2]));
-            hash.pop();
-            hash.unshift((temp1 + temp2) | 0);
-            hash[4] = (hash[4] + temp1) | 0;
-        }
-        hash.forEach((valuePart, index) => { hash[index] = (valuePart + oldHash[index]) | 0; });
-    }
-    return hash.map((word) => (word >>> 0).toString(16).padStart(8, "0")).join("");
-}
-
-async function passwordDigest(password, identity = clientId) {
-    const value = password + identity;
-    // Some mobile browsers expose crypto.subtle but reject it on an insecure HTTP
-    // origin. Fall back if the digest operation itself is unavailable or rejected.
-    if (window.crypto?.subtle && window.TextEncoder) {
-        try {
-            const bytes = new TextEncoder().encode(value);
-            const digest = await window.crypto.subtle.digest("SHA-256", bytes);
-            return Array.from(new Uint8Array(digest), (byte) =>
-                byte.toString(16).padStart(2, "0"),
-            ).join("");
-        } catch (error) {
-            console.warn("Web Crypto SHA-256 unavailable; using fallback", error);
-        }
-    }
-    return fallbackSha256(value);
-}
-
 elements.loginForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     elements.loginError.textContent = "";
@@ -1115,9 +1077,29 @@ elements.loginForm.addEventListener("submit", async (event) => {
                     ? savedAuth.reconnect_token : undefined
             );
             const auth = { name, reconnect_token: reconnectToken };
-            const adminPassword = elements.password.value;
-            if (adminPassword) {
-                auth.admin_password_digest = await passwordDigest(adminPassword, targetId);
+            if (elements.llmModeBorrow.checked) {
+                auth.llm = { mode: "borrow" };
+            } else {
+                const apiKey = elements.apiKey.value.trim();
+                if (!apiKey) {
+                    elements.loginError.textContent =
+                        "请填入你自己的 API Key，或选择借用服主的 API。";
+                    return;
+                }
+                const llm = { mode: "own", api_key: apiKey };
+                const provider = elements.llmProvider.value;
+                if (provider) {
+                    llm.provider = provider;
+                }
+                const endpoint = elements.llmEndpoint.value.trim();
+                if (endpoint) {
+                    llm.endpoint = endpoint;
+                }
+                const model = elements.llmModel.value.trim();
+                if (model) {
+                    llm.model_name = model;
+                }
+                auth.llm = llm;
             }
             roomClosed = false;
             leftRoom = false;
@@ -1229,9 +1211,29 @@ function setLoginMode(mode) {
     elements.modeJoin.classList.toggle("active", !creating);
     elements.invite.hidden = creating;
     elements.inviteLabel.hidden = creating;
-    elements.password.hidden = !creating;
-    elements.passwordLabel.hidden = !creating;
+    elements.llmFields.hidden = !creating;
+    elements.llmOwnFields.hidden = !creating || Boolean(elements.llmModeBorrow.checked);
 }
+
+elements.llmModeOwn.addEventListener("change", () => {
+    elements.llmOwnFields.hidden = false;
+});
+elements.llmModeBorrow.addEventListener("change", () => {
+    elements.llmOwnFields.hidden = true;
+});
+
+elements.keyRequiredForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    elements.keyRequiredError.textContent = "";
+    const apiKey = elements.keyRequiredInput.value.trim();
+    if (!apiKey) {
+        elements.keyRequiredError.textContent = "API Key 不能为空。";
+        return;
+    }
+    if (send("provide_key", { api_key: apiKey })) {
+        elements.keyRequiredInput.value = "";
+    }
+});
 
 elements.modeCreate.addEventListener("click", () => setLoginMode("create"));
 elements.modeJoin.addEventListener("click", () => setLoginMode("join"));

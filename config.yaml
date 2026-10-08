@@ -1,8 +1,12 @@
 server:
   host: "0.0.0.0"
   port: 4141
-  admin_password: null # optional; when set, creating a room requires this password
+  admin_password: null # optional; guards the /admin/rooms panel only, not room creation
   max_characters: 7 # maximum cast size per room
+  borrowed_room_limit: 2 # concurrent rooms that may use the server's llm.api_key (0 = refuse)
+  # max_rooms: 100 # optional cap on total concurrent rooms
+  # allowed_llm_hosts: ["api.deepseek.com"] # optional allowlist for host-supplied endpoints
+  # keyring_path: "certs/keyring.key" # Fernet keyring encrypting stored host API keys
   disconnect_grace_seconds: 120 # brief dropouts (e.g. mobile backgrounding) don't count as leaving
   empty_room_timeout_seconds: null      # null = never auto-delete empty pre-game rooms
   abandoned_room_timeout_seconds: null  # null = never auto-delete abandoned games

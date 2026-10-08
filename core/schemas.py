@@ -28,6 +28,7 @@ class ClientPayload(StrictModel):
         "retry_round",
         "history_request",
         "character_update",
+        "provide_key",
     ]
     data: dict[str, Any]
 
@@ -54,6 +55,7 @@ class ServerEvent(StrictModel):
         "removed",
         "token_usage",
         "history_chunk",
+        "key_updated",
     ]
     payload: dict[str, Any]
 

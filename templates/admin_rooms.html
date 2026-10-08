@@ -32,7 +32,7 @@
   {% if rooms %}
   <table>
     <thead>
-      <tr><th>邀请码</th><th>标题</th><th>状态</th><th>成员</th><th>已认领角色</th><th>创建于</th><th>空闲</th><th>记录</th><th></th></tr>
+      <tr><th>邀请码</th><th>标题</th><th>状态</th><th>成员</th><th>已认领角色</th><th>API</th><th>创建于</th><th>空闲</th><th>记录</th><th></th></tr>
     </thead>
     <tbody>
       {% for room in rooms %}
@@ -42,6 +42,7 @@
         <td>{{ room.state }}</td>
         <td>{{ room.players }}</td>
         <td>{{ room.claimed }}</td>
+        <td>{{ room.credentials }}</td>
         <td>{{ room.created }}</td>
         <td>{{ room.idle }}</td>
         <td>

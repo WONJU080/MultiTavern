@@ -893,6 +893,7 @@ class LobbyMixin:
             "reconnect_token": player.reconnect_token,
             "invite_code": self.room_code,
             "round_paused": self.round_paused,
+            "needs_key": bool(getattr(self.resolver, "key_required", False)),
             "name": player.name,
             "character": player.character_name,
             "is_host": player.is_host,

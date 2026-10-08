@@ -11,7 +11,7 @@ from api.server import ConnectionManager, create_app
 from core.config import settings
 from core.schemas import ServerEvent
 from logic.rooms import normalize_invite_code
-from test_engine import FakeResolver, password_digest
+from test_engine import FakeResolver
 
 
 def receive_until(socket, kind, predicate=lambda event: True):
@@ -23,11 +23,11 @@ def receive_until(socket, kind, predicate=lambda event: True):
     raise AssertionError(f"Did not receive {kind}")
 
 
-def create_room(socket, client_id, name="Host", admin_password=None):
+def create_room(socket, client_id, name="Host", llm=None):
     """Send a create_room message for a client."""
     data = {"name": name}
-    if admin_password:
-        data["admin_password_digest"] = password_digest(admin_password, client_id)
+    if llm is not None:
+        data["llm"] = llm
     socket.send_json({"event_type": "create_room", "data": data})
 
 
@@ -137,20 +137,18 @@ def test_pending_connection_cap_and_deadline():
             assert exc.value.code == 1008
 
 
-def test_room_creation_requires_admin_password_when_configured():
-    """A configured admin password guards room creation."""
+def test_room_creation_is_open_regardless_of_admin_password():
+    """Room creation has no password gate; the admin password only guards the panel."""
     settings.server.admin_password = "secret-admin"
     app = create_app(FakeResolver)
     client_id = str(uuid4())
     with TestClient(app) as client:
         with client.websocket_connect(f"/ws/{client_id}") as socket:
-            create_room(socket, client_id, admin_password="wrong")
-            assert socket.receive_json()["payload"]["msg"] == "Invalid admin password."
-            create_room(socket, client_id, admin_password="secret-admin")
+            create_room(socket, client_id)
             assert receive_until(socket, "auth_ok")["payload"]["is_host"]
-            with client.websocket_connect(f"/ws/{uuid4()}") as other:
-                create_room(other, str(uuid4()))
-                assert other.receive_json()["payload"]["msg"] == "Invalid admin password."
+        with client.websocket_connect(f"/ws/{uuid4()}") as other:
+            create_room(other, str(uuid4()))
+            assert receive_until(other, "auth_ok")["payload"]["is_host"]
 
 
 def test_manager_pending_promotion_and_old_disconnect_do_not_affect_replacement():

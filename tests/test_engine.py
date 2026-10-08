@@ -1,7 +1,6 @@
 """Game DFA and turn-order integration tests."""
 
 import asyncio
-import hashlib
 from pathlib import Path
 
 import pytest
@@ -95,11 +94,6 @@ class FakeResolver:
             },
             time_elapsed_minutes=30,
         )
-
-
-def password_digest(password: str, client_id: str) -> str:
-    """Compute the SHA-256 digest for a password and client id."""
-    return hashlib.sha256(f"{password}{client_id}".encode()).hexdigest()
 
 
 def payload(event_type: str, **data: object) -> ClientPayload:

@@ -57,6 +57,11 @@ def _room_rows(registry: RoomRegistry) -> list[dict[str, str]]:
                 "title": engine.scenario_title or "—",
                 "players": ", ".join(humans) or "—",
                 "claimed": str(len(engine.claims)),
+                "credentials": (
+                    "待补 Key"
+                    if getattr(engine.resolver, "key_required", False)
+                    else ("服主" if room.llm_meta is None else "自带")
+                ),
                 "has_record": engine.transcript.path is not None,
                 "created": (
                     datetime.now() - timedelta(seconds=max(0.0, time() - room.created_at))
@@ -203,7 +208,7 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
                             )
                             continue
                         if payload.event_type == "create_room":
-                            room = registry.create_room(client_id, payload.data)
+                            room = await registry.create_room(client_id, payload.data)
                             previous = []
                             try:
                                 await room.engine.host_join(
@@ -243,6 +248,16 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
                         break
                     elif payload.event_type in _ROOM_EVENTS:
                         raise ValueError("This socket is already in a room.")
+                    elif payload.event_type == "provide_key":
+                        registry.touch(room)
+                        await registry.provide_room_key(room, client_id, payload.data)
+                        await active_manager.send_personal(
+                            client_id,
+                            ServerEvent(
+                                type="key_updated",
+                                payload={"msg": "API Key 已更新，房间可以继续了。"},
+                            ),
+                        )
                     else:
                         registry.touch(room)
                         await room.engine.process_payload(

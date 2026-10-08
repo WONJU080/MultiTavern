@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const { readFileSync } = require("node:fs");
-const { randomUUID, createHash } = require("node:crypto");
+const { randomUUID } = require("node:crypto");
 const vm = require("node:vm");
 const path = require("node:path");
 
@@ -69,7 +69,7 @@ function browser(localStorage = storage(), sessionStorage = storage()) {
     vm.runInNewContext(source, runtime);
     return {
         runtime,
-        sockets, node, localStorage, sessionStorage, hash: runtime.fallbackSha256,
+        sockets, node, localStorage, sessionStorage,
         async login(name = "Arxs", inviteCode = "ABC-123") {
             node("name-input").value = name;
             node("invite-input").value = inviteCode;
@@ -199,22 +199,81 @@ test("claimed characters are disabled in the picker", async () => {
     assert.equal(tab.sockets[0].sent[1].data.character, "Ram");
 });
 
-test("room creation binds a digested admin password to the client ID", async () => {
+function enterCreateMode(tab, name = "Host") {
+    tab.runtime.setLoginMode("create");
+    tab.node("name-input").value = name;
+}
+
+test("room creation sends the host's own API key and never persists it", async () => {
     const tab = browser();
     tab.sockets[0].open();
-    tab.runtime.setLoginMode("create");
-    tab.node("name-input").value = "Host";
-    tab.node("password-input").value = "secret-admin";
+    enterCreateMode(tab);
+    tab.node("api-key-input").value = "sk-host-secret";
     await tab.node("login-form").listeners.submit({ preventDefault() {} });
     const socket = tab.sockets[0];
     assert.equal(socket.sent[0].event_type, "create_room");
-    const id = socket.url.split("/").at(-1);
-    assert.equal(socket.sent[0].data.admin_password_digest,
-        createHash("sha256").update("secret-admin" + id).digest("hex"));
-    assert.equal(socket.sent[0].data.password, undefined);
-    socket.receive("error", { msg: "Invalid admin password." });
-    assert.equal(tab.node("login-modal").hidden, false);
-    assert.equal(tab.node("chat-input").disabled, true);
+    assert.deepEqual(socket.sent[0].data.llm, { mode: "own", api_key: "sk-host-secret" });
+    assert.equal(socket.sent[0].data.admin_password_digest, undefined);
+    const stored = [
+        tab.sessionStorage.getItem("artificialDungeonAuth"),
+        tab.sessionStorage.getItem("artificialDungeonClientId"),
+        tab.localStorage.getItem("artificialDungeonIdentity:host"),
+    ].join(" ");
+    assert.ok(!stored.includes("sk-host-secret"), "the key must never be persisted");
+});
+
+test("borrow mode asks for the server API without sending any key", async () => {
+    const tab = browser();
+    tab.sockets[0].open();
+    enterCreateMode(tab);
+    tab.node("llm-mode-borrow").checked = true;
+    await tab.node("login-form").listeners.submit({ preventDefault() {} });
+    assert.deepEqual(tab.sockets[0].sent[0].data.llm, { mode: "borrow" });
+});
+
+test("advanced provider overrides ride along with an own key", async () => {
+    const tab = browser();
+    tab.sockets[0].open();
+    enterCreateMode(tab);
+    tab.node("api-key-input").value = "sk-custom";
+    tab.node("llm-provider").value = "openai";
+    tab.node("llm-endpoint").value = "https://api.example.com/v1";
+    tab.node("llm-model").value = "gpt-4o-mini";
+    await tab.node("login-form").listeners.submit({ preventDefault() {} });
+    assert.deepEqual(tab.sockets[0].sent[0].data.llm, {
+        mode: "own", api_key: "sk-custom", provider: "openai",
+        endpoint: "https://api.example.com/v1", model_name: "gpt-4o-mini",
+    });
+});
+
+test("own mode refuses to create without a key", async () => {
+    const tab = browser();
+    tab.sockets[0].open();
+    enterCreateMode(tab);
+    await tab.node("login-form").listeners.submit({ preventDefault() {} });
+    assert.equal(tab.node("login-error").textContent,
+        "请填入你自己的 API Key，或选择借用服主的 API。");
+    assert.equal(tab.sockets[0].sent.length, 0);
+});
+
+test("a key-required room prompts the host and submits provide_key", async () => {
+    const tab = browser();
+    tab.sockets[0].open();
+    await tab.login();
+    await tab.pick();
+    tab.sockets[0].receive("auth_ok", {
+        name: "Arxs", character: "金元珠", reconnect_token: "t", is_host: true,
+        needs_key: true, state: "ACTIVE_TURN", invite_code: "ABC-123",
+        players: [{ name: "Arxs", character: "金元珠", connected: true, is_host: true }],
+        player_order: ["金元珠"], characters: [],
+    });
+    assert.equal(tab.node("key-required-modal").hidden, false);
+    tab.node("key-required-input").value = "sk-restored";
+    await tab.node("key-required-form").listeners.submit({ preventDefault() {} });
+    assert.deepEqual(tab.sockets[0].sent.at(-1),
+        { event_type: "provide_key", data: { api_key: "sk-restored" } });
+    tab.sockets[0].receive("key_updated", { msg: "ok" });
+    assert.equal(tab.node("key-required-modal").hidden, true);
 });
 
 test("a room-closed notice stops reconnects and returns to the login screen", async () => {
@@ -246,13 +305,6 @@ test("corrupt stored JSON does not prevent a fresh login", async () => {
     const tab = await joined(local, session);
     assert.equal(tab.node("login-modal").hidden, true);
 });
-
-for (const value of ["", "abc", "x".repeat(55), "x".repeat(56), "x".repeat(64),
-    "x".repeat(200), "Salasana 🌲 äö漢字"]) {
-    test(`fallback SHA-256 matches standard hashing for ${value.length} characters`, () => {
-        assert.equal(browser().hash(value), createHash("sha256").update(value).digest("hex"));
-    });
-}
 
 test("skip vote panel follows the turn and reports progress", async () => {
     const tab = await joined();
@@ -353,16 +405,14 @@ test("rejoining after leave reconnects and sends room_info", async () => {
 test("creating a room after leave reconnects and sends create_room", async () => {
     const tab = await joined();
     tab.runtime.leaveRoom();
-    tab.runtime.setLoginMode("create");
-    tab.node("name-input").value = "Host";
-    tab.node("password-input").value = "secret-admin";
+    enterCreateMode(tab);
+    tab.node("api-key-input").value = "sk-after-leave";
     await tab.node("login-form").listeners.submit({ preventDefault() {} });
     const next = tab.sockets.at(-1);
     assert.notEqual(next, tab.sockets[0]);
     next.open();
     assert.equal(next.sent[0].event_type, "create_room");
-    assert.equal(next.sent[0].data.admin_password_digest,
-        createHash("sha256").update("secret-admin" + next.url.split("/").at(-1)).digest("hex"));
+    assert.deepEqual(next.sent[0].data.llm, { mode: "own", api_key: "sk-after-leave" });
 });
 
 test("reconnect tokens are remembered per room", async () => {
