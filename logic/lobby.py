@@ -222,8 +222,11 @@ def parse_prompt_blocks(value: object) -> list[PromptBlock]:
         if not isinstance(entry, dict):
             raise ValueError("每个提示块必须是含 'content' 的对象")
         position = entry.get("position", "output")
-        if position not in ("system", "scenario", "output"):
+        if position not in ("system", "scenario", "output", "history"):
             raise ValueError(f"未知的提示块位置 '{position}'。")
+        role = entry.get("role", "system")
+        if role not in ("system", "assistant", "user"):
+            raise ValueError(f"未知的提示块角色 '{role}'。")
         if not isinstance(entry.get("enabled", True), bool):
             raise ValueError("'enabled' 必须是布尔值")
         blocks.append(
@@ -231,6 +234,8 @@ def parse_prompt_blocks(value: object) -> list[PromptBlock]:
                 title=clean_optional_text(entry.get("title"), "prompt block title", 80),
                 content=clean_text(entry.get("content"), "prompt block content", 10_000),
                 position=position,
+                role=role,
+                depth=_bounded_int(entry.get("depth"), "prompt block depth", 0, 100),
                 enabled=bool(entry.get("enabled", True)),
             )
         )

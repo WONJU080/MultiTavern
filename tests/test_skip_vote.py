@@ -65,10 +65,7 @@ def test_vote_outside_active_turn_is_rejected(tmp_path):
         await engine.process_payload("p2", payload("action", action="Wait"))
         assert engine.state.name == "AWAITING_LLM"
         await engine.process_payload("p1", payload("skip_vote"))
-        assert (
-            "只能在回合进行中投票"
-            in sender.events_of_type("error")[-1].payload["msg"]
-        )
+        assert "只能在回合进行中投票" in sender.events_of_type("error")[-1].payload["msg"]
         assert not sender.events_of_type("skip_vote")
         await engine.wait_for_inference()
 

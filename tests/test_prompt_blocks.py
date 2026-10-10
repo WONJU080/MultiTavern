@@ -38,6 +38,24 @@ def test_parse_prompt_blocks_and_sampling_validation():
     assert parse_sampling(None) == SamplingConfig()
 
 
+def test_parse_prompt_blocks_accepts_history_role_and_depth():
+    """history blocks carry a role and a bounded depth; older blocks keep defaults."""
+    blocks = parse_prompt_blocks(
+        [{"content": "提醒。", "position": "history", "role": "assistant", "depth": 4}]
+    )
+    assert blocks[0].position == "history"
+    assert blocks[0].role == "assistant"
+    assert blocks[0].depth == 4
+    default = parse_prompt_blocks([{"content": "x"}])[0]
+    assert default.position == "output" and default.role == "system" and default.depth == 0
+    with pytest.raises(ValueError):
+        parse_prompt_blocks([{"content": "x", "position": "history", "role": "nobody"}])
+    with pytest.raises(ValueError):
+        parse_prompt_blocks([{"content": "x", "depth": 101}])
+    with pytest.raises(ValueError):
+        parse_prompt_blocks([{"content": "x", "depth": True}])
+
+
 def build_manager(client):
     """Create a manager with genesis and prompt configuration."""
     manager = LLMContextManager(client)
@@ -75,6 +93,48 @@ def test_blocks_land_at_their_positions_and_disabled_blocks_stay_out():
         assert scenario_index < output_index
         assert output_index == len(messages) - 1
         assert not any("[关闭块]" in content for content in contents)
+
+    asyncio.run(run())
+
+
+def test_history_blocks_are_interleaved_at_depth_with_role():
+    """history blocks land at the configured depth and role."""
+    settings.llm.provider = "openai"
+    settings.llm.structured_outputs = True
+    client = FakeClient()
+
+    async def run():
+        manager = build_manager(client)
+        manager.history[:] = [
+            {"role": "user", "content": "旧输入一"},
+            {"role": "assistant", "content": "旧输出一"},
+            {"role": "user", "content": "旧输入二"},
+        ]
+        manager.set_prompt_blocks(
+            [
+                PromptBlock(content="[贴近提醒]", position="history", role="system", depth=0),
+                PromptBlock(content="[假助手回合]", position="history", role="assistant", depth=0),
+                PromptBlock(content="[更深提醒]", position="history", role="user", depth=2),
+                PromptBlock(content="[关闭的历史块]", position="history", depth=1, enabled=False),
+            ]
+        )
+        await manager.generate_resolution({"Alice": "Wait"})
+        messages = client.calls[-1]["messages"]
+        contents = [message["content"] for message in messages]
+        roles = [message["role"] for message in messages]
+
+        deep_index = contents.index("[更深提醒]")
+        assert roles[deep_index] == "user"
+        assert contents[deep_index - 1] == "旧输入一"
+        assert contents[deep_index + 1] == "旧输出一"
+
+        remind_index = contents.index("[贴近提醒]")
+        assistant_index = contents.index("[假助手回合]")
+        assert roles[remind_index] == "system"
+        assert roles[assistant_index] == "assistant"
+        assert remind_index + 1 == assistant_index
+        assert assistant_index + 1 == len(messages) - 1
+        assert not any("[关闭的历史块]" in content for content in contents)
 
     asyncio.run(run())
 
@@ -167,7 +227,15 @@ def test_blocks_and_sampling_flow_through_engine_and_persistence(tmp_path):
                 scenario="A village.",
                 characters=[{"name": "Host"}],
                 host_character="Host",
-                prompt_blocks=[{"title": "文风", "content": "简洁。", "position": "scenario"}],
+                prompt_blocks=[
+                    {
+                        "title": "文风",
+                        "content": "简洁。",
+                        "position": "history",
+                        "role": "assistant",
+                        "depth": 3,
+                    }
+                ],
                 sampling={"temperature": 0.8, "top_p": 0.9},
             ),
         )
@@ -177,7 +245,9 @@ def test_blocks_and_sampling_flow_through_engine_and_persistence(tmp_path):
         assert [block.content for block in resolver.prompt_blocks] == ["简洁。"]
         assert resolver.sampling.temperature == 0.8
         restored = restore_engine(engine.to_persistent_dict(), sender, FakeResolver)
-        assert [block.position for block in restored.prompt_blocks] == ["scenario"]
+        assert [block.position for block in restored.prompt_blocks] == ["history"]
+        assert restored.prompt_blocks[0].role == "assistant"
+        assert restored.prompt_blocks[0].depth == 3
         assert restored.sampling.top_p == 0.9
         assert restored.resolver.sampling.temperature == 0.8
         await engine.shutdown()

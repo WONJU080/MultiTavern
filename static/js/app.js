@@ -1328,15 +1328,32 @@ function makePromptBlockRow(block = {}) {
     title.value = block.title || "";
     const position = document.createElement("select");
     position.className = "prompt-block-position";
-    ["system", "scenario", "output"].forEach((value) => {
+    ["system", "scenario", "history", "output"].forEach((value) => {
         const option = document.createElement("option");
         option.value = value;
         option.textContent = value;
         position.appendChild(option);
     });
-    position.value = ["system", "scenario", "output"].includes(block.position)
+    position.value = ["system", "scenario", "history", "output"].includes(block.position)
         ? block.position
         : "output";
+    const role = document.createElement("select");
+    role.className = "prompt-block-role";
+    ["system", "assistant", "user"].forEach((value) => {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value;
+        role.appendChild(option);
+    });
+    role.value = ["system", "assistant", "user"].includes(block.role) ? block.role : "system";
+    const depth = document.createElement("input");
+    depth.className = "prompt-block-depth";
+    depth.type = "number";
+    depth.min = "0";
+    depth.max = "100";
+    depth.placeholder = "depth";
+    depth.title = "history 位置：距当前请求倒数的消息数";
+    depth.value = Number.isFinite(block.depth) ? block.depth : 0;
     const enabledLabel = document.createElement("label");
     enabledLabel.className = "check-label prompt-block-enabled";
     const enabledCheck = document.createElement("input");
@@ -1354,7 +1371,7 @@ function makePromptBlockRow(block = {}) {
     remove.className = "remove-row";
     remove.textContent = "×";
     remove.addEventListener("click", () => row.remove());
-    row.append(title, position, enabledLabel, content, remove);
+    row.append(title, position, role, depth, enabledLabel, content, remove);
     elements.promptBlocksEditor.appendChild(row);
     return row;
 }
@@ -1364,6 +1381,8 @@ function collectPromptBlocks() {
         .map((row) => ({
             title: row.querySelector(".prompt-block-title").value.trim(),
             position: row.querySelector(".prompt-block-position").value,
+            role: row.querySelector(".prompt-block-role").value,
+            depth: Number.parseInt(row.querySelector(".prompt-block-depth").value, 10) || 0,
             enabled: row.querySelector(".prompt-block-enabled input").checked,
             content: row.querySelector(".prompt-block-content").value.trim(),
         }))

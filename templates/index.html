@@ -163,7 +163,7 @@
               <label for="sampling-top-p">top_p（0–1，留空=默认）</label>
               <input id="sampling-top-p" type="number" min="0" max="1" step="0.01">
             </div>
-            <p class="config-hint">位置说明：system＝核心系统提示之后 · scenario＝剧情/指引之后 · output＝生成之前。</p>
+            <p class="config-hint">位置说明：system＝核心系统提示之后 · scenario＝剧情/指引之后 · output＝生成之前 · history＝插入最近对话（role/depth 生效，depth 0 紧贴当前回合）。</p>
             <div id="prompt-blocks-editor"></div>
             <button type="button" id="add-prompt-block">+ 添加提示块</button>
           </details>

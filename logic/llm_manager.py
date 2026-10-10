@@ -307,6 +307,33 @@ class LLMContextManager:
             block for block in self.prompt_blocks if block.enabled and block.position == position
         ]
 
+    def _history_with_blocks(self, kind: str) -> list[dict[str, str]]:
+        """Interleave depth-injected blocks into the retained conversation.
+
+        Depth counts backward from the end of the retained history: depth 0
+        lands immediately before the current request, depth 1 before the last
+        retained message, and so on. Depths beyond the retained length clamp to
+        the start of history, and blocks sharing a depth keep their configured
+        order. Each block is emitted with its own role, so a host can place a
+        pseudo assistant turn or a system reminder right beside the live turn.
+        """
+        if kind not in {"round", "dice", "initial"}:
+            return list(self.history)
+        blocks = self._enabled_blocks("history")
+        if not blocks:
+            return list(self.history)
+        length = len(self.history)
+        insertions: dict[int, list[dict[str, str]]] = {}
+        for block in blocks:
+            index = max(0, length - min(block.depth, length))
+            insertions.setdefault(index, []).append({"role": block.role, "content": block.content})
+        messages: list[dict[str, str]] = []
+        for index, message in enumerate(self.history):
+            messages.extend(insertions.get(index, []))
+            messages.append(message)
+        messages.extend(insertions.get(length, []))
+        return messages
+
     def _lorebook_block(self, scan_text: str) -> str:
         """Return budgeted world-book content triggered by recent context.
 
@@ -810,7 +837,7 @@ class LLMContextManager:
             await self._compact_if_needed(request_prompt, schema, kind)
         messages = [
             *self._fixed_messages(kind),
-            *(self.history if include_history else []),
+            *(self._history_with_blocks(kind) if include_history else []),
             request_prompt,
         ]
         for repair in range(self.llm.max_retries + 1):

@@ -794,6 +794,7 @@ button:disabled {
 .lorebook-row input[type="number"] { width: 4rem; }
 .prompt-block-row .prompt-block-title { flex: 0 1 9rem; }
 .prompt-block-row select { flex: 0 0 auto; }
+.prompt-block-row .prompt-block-depth { flex: 0 0 4.5rem; }
 .config-row .check-label { flex: 0 0 auto; margin: 0; font-size: 0.78rem; }
 .config-row .remove-row {
     flex: 0 0 auto;

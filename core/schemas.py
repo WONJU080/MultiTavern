@@ -135,11 +135,18 @@ class LorebookEntry(StrictModel):
 
 
 class PromptBlock(StrictModel):
-    """A host-supplied instruction block placed at a fixed prompt position."""
+    """A host-supplied instruction block placed at a fixed prompt position.
+
+    ``history`` blocks are interleaved into the retained conversation at
+    ``depth`` messages before the current request and take ``role``, which lets
+    a host place reminders or pseudo assistant turns next to the live turn.
+    """
 
     title: str = ""
     content: str
-    position: Literal["system", "scenario", "output"] = "output"
+    position: Literal["system", "scenario", "output", "history"] = "output"
+    role: Literal["system", "assistant", "user"] = "system"
+    depth: int = Field(default=0, ge=0, le=100)
     enabled: bool = True
 
 

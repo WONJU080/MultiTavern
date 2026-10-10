@@ -269,15 +269,11 @@ def test_host_can_end_game_and_finalize_transcript(tmp_path: Path) -> None:
         engine, sender, _ = await build_started_game(tmp_path)
 
         await engine.process_payload("player", payload("end_game"))
-        assert sender.events_of_type("error")[-1].payload["msg"] == (
-            "只有房主可以结束游戏。"
-        )
+        assert sender.events_of_type("error")[-1].payload["msg"] == ("只有房主可以结束游戏。")
 
         await engine.process_payload("host", payload("end_game"))
         assert engine.state is GameState.ENDED
-        assert sender.events_of_type("game_ended")[-1].payload["msg"] == (
-            "房主结束了本局游戏。"
-        )
+        assert sender.events_of_type("game_ended")[-1].payload["msg"] == ("房主结束了本局游戏。")
         assert engine.transcript.path is not None
         assert "</html>" in engine.transcript.path.read_text(encoding="utf-8")
 

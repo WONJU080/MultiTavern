@@ -190,9 +190,7 @@ def test_host_ending_the_game_closes_the_room():
             receive_until(host, "turn_directive")
             host.send_json({"event_type": "end_game", "data": {}})
             assert receive_until(host, "game_ended")["payload"]["msg"] == "房主结束了本局游戏。"
-            assert (
-                receive_until(host, "room_closed")["payload"]["msg"] == "房主结束了本局游戏。"
-            )
+            assert receive_until(host, "room_closed")["payload"]["msg"] == "房主结束了本局游戏。"
             assert normalize_invite_code(code) not in app.state.registry.rooms
 
 
