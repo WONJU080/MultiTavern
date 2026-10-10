@@ -753,8 +753,7 @@ class LLMContextManager:
             count = await self._input_tokens([*self._fixed_messages(kind), prompt], schema)
             if not self._fits(count + 1_024 + 256 * len(actions), kind):
                 raise LLMResolutionError(
-                    "Scenario, durable memory and combined actions exceed the context budget. "
-                    "Shorten the action or use a larger backend context."
+                    "剧情、持久记忆与合并行动超出上下文预算，请缩短行动或使用更大的后端上下文。"
                 )
 
     async def _request(
@@ -905,20 +904,20 @@ class LLMContextManager:
         """Reject incomplete or inconsistent output before remembering it."""
         if isinstance(result, DicePlan):
             if names is not None and set(result.rolls) != set(names):
-                raise LLMResolutionError("Invalid dice plan participants.")
+                raise LLMResolutionError("骰点计划参与者无效。")
             if len(set(result.hidden_rolls)) != len(result.hidden_rolls) or not set(
                 result.hidden_rolls
             ) <= {name for name, needed in result.rolls.items() if needed}:
-                raise LLMResolutionError("Invalid hidden dice membership.")
+                raise LLMResolutionError("隐藏骰成员无效。")
         if isinstance(result, ContextSummary):
             if names is not None and set(result.player_states) != set(names):
-                raise LLMResolutionError("Invalid summary participants.")
+                raise LLMResolutionError("摘要参与者无效。")
             if not result.world_state.strip() or any(
                 not text.strip()
                 or text.strip().casefold() in ("{}", "[]", "none", "unknown", "null")
                 for text in result.player_states.values()
             ):
-                raise LLMResolutionError("Summary contains empty or unknown player state.")
+                raise LLMResolutionError("摘要包含空或未知的玩家状态。")
         if isinstance(result, RoundResolution):
             for text in (
                 result.round_title or "",
@@ -944,11 +943,11 @@ class LLMContextManager:
             if not result.global_narrative.strip() or (
                 title_required and not (result.round_title or "").strip()
             ):
-                raise LLMResolutionError("Model returned empty required narrative content.")
+                raise LLMResolutionError("AI 返回了空的必需叙述内容。")
             if names is not None and set(result.player_resolutions) != set(names):
-                raise LLMResolutionError("Invalid resolution participants.")
+                raise LLMResolutionError("结算参与者无效。")
             if any(not value.strip() for value in result.player_resolutions.values()):
-                raise LLMResolutionError("Model returned an empty player outcome.")
+                raise LLMResolutionError("AI 返回了空的玩家结果。")
             for value in result.player_resolutions.values():
                 # Catch clear incomplete clauses without requiring English punctuation
                 # on every outcome or trying to move text between player identities.
@@ -977,16 +976,12 @@ class LLMContextManager:
             len(fragment.strip()) >= 16 and " ".join(fragment.casefold().split()) in normalized
             for fragment in fragments
         ):
-            raise LLMResolutionError(
-                "Model output disclosed private guidance; no result committed."
-            )
+            raise LLMResolutionError("AI 输出泄露了私密指引，本轮结果未提交。")
         for value in private_rolls.values():
             if re.search(
                 rf"\b(?:rolled?|check|d100|dice)\b[^.!?\n]{{0,80}}\b{value}\b", text, re.IGNORECASE
             ) or re.search(rf"\b{value}\s*/\s*100\b", text):
-                raise LLMResolutionError(
-                    "Model output disclosed a private check; no result committed."
-                )
+                raise LLMResolutionError("AI 输出泄露了私有检定，本轮结果未提交。")
 
     def begin_round_usage(self, number: int) -> None:
         """Start accounting once per round; host retries keep the same totals."""
@@ -1056,9 +1051,7 @@ class LLMContextManager:
         """Measure each attempt, including SDK-compatible transient retries."""
         count = await self._input_tokens(messages, schema)
         if not self._fits(count, kind):
-            raise LLMResolutionError(
-                "Request exceeds the context budget; history and durable memory were preserved."
-            )
+            raise LLMResolutionError("请求超出上下文预算，历史与持久记忆已保留。")
         try:
             async with asyncio.timeout(self.llm.request_timeout_seconds):
                 for attempt in range(self.llm.max_retries + 1):
@@ -1079,7 +1072,7 @@ class LLMContextManager:
                         logger.info("Retrying LLM request kind=%s attempt=%d", kind, attempt + 2)
                         await asyncio.sleep(min(0.5 * 2**attempt, 8.0))
         except TimeoutError as exc:
-            raise LLMResolutionError("The model request failed: deadline exceeded.") from exc
+            raise LLMResolutionError("AI 请求超时，未能在期限内返回。") from exc
 
     async def _parse_attempt(
         self,
@@ -1114,12 +1107,10 @@ class LLMContextManager:
                     )
                     choice = response.choices[0]
                     if getattr(choice, "finish_reason", None) == "length":
-                        raise LLMOutputTruncatedError(
-                            "Model output reached its token limit; no result committed."
-                        )
+                        raise LLMOutputTruncatedError("AI 输出触达字数上限，本轮结果未提交。")
                     parsed = choice.message.parsed
                     if parsed is None:
-                        raise LLMResolutionError("Model returned no validated result.")
+                        raise LLMResolutionError("AI 没有返回通过校验的结果。")
                     result = schema.model_validate(
                         parsed.model_dump() if isinstance(parsed, BaseModel) else parsed
                     )
@@ -1139,12 +1130,10 @@ class LLMContextManager:
                     )
                     choice = response.choices[0]
                     if getattr(choice, "finish_reason", None) == "length":
-                        raise LLMOutputTruncatedError(
-                            "Model output reached its token limit; no result committed."
-                        )
+                        raise LLMOutputTruncatedError("AI 输出触达字数上限，本轮结果未提交。")
                     content = getattr(choice.message, "content", None)
                     if not isinstance(content, str) or not content.strip():
-                        raise LLMResolutionError("Model returned no validated result.")
+                        raise LLMResolutionError("AI 没有返回通过校验的结果。")
                     self._last_response_text = content
                     result = schema.model_validate_json(content)
         except asyncio.CancelledError:
@@ -1161,7 +1150,7 @@ class LLMContextManager:
             if len(detail) > 400:
                 detail = detail[:400] + "..."
             logger.warning("LLM %s failed: %s", kind, error)
-            raise LLMResolutionError(f"Invalid output schema: {detail}") from exc
+            raise LLMResolutionError(f"AI 输出不符合要求的结构：{detail}") from exc
         except (
             OpenAIError,
             IndexError,
@@ -1176,12 +1165,8 @@ class LLMContextManager:
             response = getattr(exc, "completion", response)
             logger.warning("LLM %s failed: %s", kind, error)
             if isinstance(exc, APIConnectionError) and not isinstance(exc, APITimeoutError):
-                raise LLMBackendUnavailableError(
-                    "Could not connect to the LLM backend; no result committed."
-                ) from exc
-            raise LLMResolutionError(
-                "The model request failed or was truncated; no result committed."
-            ) from exc
+                raise LLMBackendUnavailableError("无法连接 AI 后端，本轮结果未提交。") from exc
+            raise LLMResolutionError("AI 请求失败或输出被截断，本轮结果未提交。") from exc
         finally:
             usage = getattr(response, "usage", None)
             timings = getattr(response, "timings", None)
@@ -1256,7 +1241,7 @@ class LLMContextManager:
                         )
                     return
                 if not self.history:
-                    raise LLMResolutionError("Durable memory and current input do not fit.")
+                    raise LLMResolutionError("持久记忆与当前输入超出预算。")
                 # Largest prefix that fits the summary request; retained memory is
                 # included exactly once so later summaries replace obsolete facts.
                 selected = 0
@@ -1298,7 +1283,7 @@ class LLMContextManager:
                     )
                     return
                 if not selected:
-                    raise LLMResolutionError("History cannot be safely summarized within budget.")
+                    raise LLMResolutionError("在预算内无法安全压缩历史。")
                 passes += 1
                 logger.info(
                     "Context compaction started kind=%s pass=%d reason=%s "
@@ -1451,9 +1436,7 @@ class LLMContextManager:
                 "Memory recompression did not shrink; original memory retained."
             )
         if self._context_size([candidate]) > memory_cap:
-            raise LLMResolutionError(
-                "Memory recompression still exceeds the budget; original memory retained."
-            )
+            raise LLMResolutionError("记忆重压缩仍超出预算，已保留原记忆。")
         logger.info(
             "Durable memory recompressed size=%d->%d cap=%d",
             before,
@@ -1499,7 +1482,7 @@ class LLMContextManager:
         """Synchronous conservative check; never mutate or silently evict memory."""
         messages = [*self._fixed_messages(), *(self.history if include_history else []), prompt]
         if not self._fits(self._estimate_input(messages, RoundResolution), "round"):
-            raise LLMResolutionError("Context exceeds budget; memory preserved.")
+            raise LLMResolutionError("上下文超出预算，记忆已保留。")
         return messages
 
     @staticmethod

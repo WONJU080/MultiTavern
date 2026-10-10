@@ -61,11 +61,11 @@ def test_unauthenticated_socket_cannot_receive_broadcasts_or_take_over_identity(
                 # A broadcast queued before the error would be a data leak.
                 assert pending.receive_json() == {
                     "type": "error",
-                    "payload": {"msg": "Create or join a room before sending game messages."},
+                    "payload": {"msg": "请先创建或加入房间再发送游戏消息。"},
                 }
             with client.websocket_connect(f"/ws/{host_id}") as impostor:
                 join_room(impostor, host_id, code, "Impostor", "Host")
-                assert "not accepting new players" in impostor.receive_json()["payload"]["msg"]
+                assert "本局已不接受新玩家" in impostor.receive_json()["payload"]["msg"]
                 impostor.send_json({"event_type": "end_game", "data": {}})
                 assert impostor.receive_json()["type"] == "error"
                 host.send_json(
@@ -228,12 +228,12 @@ def test_active_game_reconnect_restores_original_player_with_private_proof(rejoi
                 receive_until(
                     observer,
                     "system_msg",
-                    lambda event: (event["payload"]["msg"] == f"{name} disconnected."),
+                    lambda event: (event["payload"]["msg"] == f"{name} 已断开连接。"),
                 )
                 newcomer_id = str(uuid4())
                 with client.websocket_connect(f"/ws/{newcomer_id}") as newcomer:
                     join_room(newcomer, newcomer_id, code, "Newcomer", character)
-                    assert "already been claimed" in newcomer.receive_json()["payload"]["msg"]
+                    assert "已被认领" in newcomer.receive_json()["payload"]["msg"]
                 with client.websocket_connect(f"/ws/{identity}") as recovered:
                     # Even a stale token falls back to name-based reclaim.
                     join_room(recovered, identity, code, name, character, "stale-token")

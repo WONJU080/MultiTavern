@@ -49,7 +49,7 @@ def test_self_vote_is_rejected(tmp_path):
         engine, sender, _ = await setup_game(tmp_path)
         assert engine.active_player_id == "host"
         await engine.process_payload("host", payload("skip_vote"))
-        assert "cannot vote to skip yourself" in sender.events_of_type("error")[-1].payload["msg"]
+        assert "你不能投票跳过自己" in sender.events_of_type("error")[-1].payload["msg"]
         assert not engine.round_buffer
 
     asyncio.run(run())
@@ -66,7 +66,7 @@ def test_vote_outside_active_turn_is_rejected(tmp_path):
         assert engine.state.name == "AWAITING_LLM"
         await engine.process_payload("p1", payload("skip_vote"))
         assert (
-            "only allowed during an active turn"
+            "只能在回合进行中投票"
             in sender.events_of_type("error")[-1].payload["msg"]
         )
         assert not sender.events_of_type("skip_vote")
@@ -113,8 +113,8 @@ def test_unanimous_vote_skips_and_removes_the_player_at_commit(tmp_path):
         removed = sender.events_of_type("removed")[-1]
         removed_targets = [e for _, e in sender.events if e.type == "removed"]
         assert len(removed_targets) == 1
-        assert "unanimous skip vote" in removed.payload["msg"]
-        assert "Rejoin" in removed.payload["msg"]
+        assert "被全员投票跳过" in removed.payload["msg"]
+        assert "重新加入" in removed.payload["msg"]
         assert engine.active_player_id == "p1"
         await engine.shutdown()
 

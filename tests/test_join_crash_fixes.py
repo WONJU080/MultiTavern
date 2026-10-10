@@ -63,7 +63,7 @@ def test_rejected_join_does_not_leak_gateway_pending_sockets():
         with client.websocket_connect(f"/ws/{client_id}") as socket:
             join_room(socket, client_id, "NOPE-000", "Arxs", "Arxs")
             error = receive_until(socket, "error")
-            assert "Room not found" in error["payload"]["msg"]
+            assert "找不到该房间" in error["payload"]["msg"]
         # The socket has closed; the pending set must be empty again.
         assert app.state.manager.pending == set()
 

@@ -49,13 +49,13 @@ def test_parse_cast_validates_structure():
     """Cast input is strictly validated."""
     cast = parse_cast([{"name": "金元珠", "description": "剑客"}, {"name": "Ram"}])
     assert [c.name for c in cast] == ["金元珠", "Ram"]
-    with pytest.raises(ValueError, match="non-empty list"):
+    with pytest.raises(ValueError, match="必须是非空列表"):
         parse_cast([])
-    with pytest.raises(ValueError, match="unique"):
+    with pytest.raises(ValueError, match="不能重复"):
         parse_cast([{"name": "A"}, {"name": "a"}])
-    with pytest.raises(ValueError, match="must be an object"):
+    with pytest.raises(ValueError, match="每个角色必须是含"):
         parse_cast(["A"])
-    with pytest.raises(ValueError, match="must contain 1-40"):
+    with pytest.raises(ValueError, match="必须是 1-40 个字符"):
         parse_cast([{"name": ""}])
 
 
@@ -74,7 +74,7 @@ def test_host_claim_is_optional(tmp_path):
                 host_character="Stranger",
             ),
         )
-        assert "does not exist" in sender.events_of_type("error")[-1].payload["msg"]
+        assert "不在角色名单中" in sender.events_of_type("error")[-1].payload["msg"]
         assert engine.state is GameState.SCENARIO_INJECTION
         assert not engine.cast
         # An empty claim makes the host a pure observer.
@@ -110,9 +110,9 @@ def test_claiming_the_same_character_twice_is_rejected(tmp_path):
         engine, sender, _ = await build_engine(tmp_path)
         await set_scenario(engine, CAST_THREE, "Host")
         await engine.player_join("p1", {"name": "One", "character": "Player"})
-        with pytest.raises(ValueError, match="already been claimed"):
+        with pytest.raises(ValueError, match="已被认领"):
             await engine.player_join("p2", {"name": "Two", "character": "Player"})
-        with pytest.raises(ValueError, match="does not exist"):
+        with pytest.raises(ValueError, match="不存在于此房间"):
             await engine.player_join("p2", {"name": "Two", "character": "Ghost"})
         await engine.player_join("p2", {"name": "Two", "character": "Free"})
         assert engine.claims["Free"] == "Two"

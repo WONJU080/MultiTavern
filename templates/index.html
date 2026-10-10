@@ -15,32 +15,32 @@
 
 <body>
   <main id="grid-container" hidden>
-    <section id="chat-pane" aria-label="Players and party chat">
+    <section id="chat-pane" aria-label="玩家与队伍聊天">
       <div id="player-roster" aria-label="Current players">
-        <h2>Players</h2>
+        <h2>玩家</h2>
         <ul id="player-list"></ul>
       </div>
       <div id="chat-messages" aria-label="Party chat" aria-live="polite"></div>
       <form id="chat-form">
-        <input id="chat-input" maxlength="10000" autocomplete="off" placeholder="Chat with the party..."
+        <input id="chat-input" maxlength="10000" autocomplete="off" placeholder="与队伍聊天…"
           aria-label="Chat message">
       </form>
     </section>
     <header id="title-pane">
-      <span id="scenario-title">Awaiting scenario initialization...</span>
-      <span id="game-clock" hidden aria-label="In-game clock"></span>
+      <span id="scenario-title">等待剧情初始化…</span>
+      <span id="game-clock" hidden aria-label="游戏内时钟"></span>
       <details id="token-usage" hidden>
-        <summary aria-label="Show token accounting"><span id="token-chart" role="img"
-          aria-label="Estimated retained context"></span><span id="token-count"></span></summary>
+        <summary aria-label="显示 token 统计"><span id="token-chart" role="img"
+          aria-label="估算的保留上下文"></span><span id="token-count"></span></summary>
         <div id="token-details"></div>
       </details>
-      <span id="player-identity" aria-label="Current player"></span>
+      <span id="player-identity" aria-label="当前玩家"></span>
     </header>
-    <nav id="mobile-view-toggle" aria-label="View switcher">
+    <nav id="mobile-view-toggle" aria-label="视图切换">
       <button type="button" id="view-story" class="active">剧情</button>
       <button type="button" id="view-chat">聊天</button>
     </nav>
-    <section id="log-pane" data-pane-title="Game State" aria-label="Game state: scenario state and player actions"
+    <section id="log-pane" data-pane-title="Game State" aria-label="游戏状态：剧情与玩家行动"
       aria-live="polite">
       <img id="game-banner" src="/static/media/AnyworldBanner.jpg" alt="Anyworld"
         width="1376" height="322" fetchpriority="high">
@@ -48,24 +48,24 @@
     <form id="input-pane">
       <div id="skip-vote-box" hidden>
         <span id="skip-vote-status" aria-live="polite"></span>
-        <button type="button" id="skip-vote-button">Vote to skip</button>
+        <button type="button" id="skip-vote-button">投票跳过</button>
       </div>
       <input type="text" id="action-input" maxlength="50000" disabled autocomplete="off"
-        placeholder="Waiting for your turn..." aria-label="Your character action">
+        placeholder="等待轮到你…" aria-label="Your character action">
     </form>
   </main>
 
   <div id="login-modal" class="modal" role="dialog" aria-modal="true">
     <form id="login-form" class="modal-card">
       <h1>Anyworld</h1>
-      <p>Create a room as host, or join a friend's room with an invite code.</p>
+      <p>创建房间当房主，或用邀请码加入朋友的房间。</p>
       <div class="mode-toggle" role="tablist" aria-label="Room mode">
-        <button type="button" id="mode-create" class="mode-button" role="tab">Create room</button>
-        <button type="button" id="mode-join" class="mode-button active" role="tab">Join room</button>
+        <button type="button" id="mode-create" class="mode-button" role="tab">创建房间</button>
+        <button type="button" id="mode-join" class="mode-button active" role="tab">加入房间</button>
       </div>
-      <label for="name-input">Player name</label>
+      <label for="name-input">玩家名字</label>
       <input id="name-input" maxlength="40" required autocomplete="nickname">
-      <label for="invite-input" id="invite-label">Invite code</label>
+      <label for="invite-input" id="invite-label">邀请码</label>
       <input id="invite-input" maxlength="16" autocomplete="off" placeholder="ABC-123">
       <fieldset id="llm-fields" hidden>
         <legend>AI 接口（建房必选）</legend>
@@ -92,10 +92,10 @@
           </details>
         </div>
       </fieldset>
-      <button type="submit" id="login-submit">Enter</button>
+      <button type="submit" id="login-submit">进入</button>
       <p id="login-error" class="error" role="alert"></p>
       <div id="join-step" hidden>
-        <p>Choose your character:</p>
+        <p>选择你的角色：</p>
         <div id="join-character-list"></div>
         <p id="join-status" class="error" role="alert"></p>
       </div>
@@ -105,94 +105,94 @@
   <div id="host-modal" class="modal" role="dialog" aria-modal="true" hidden>
     <div class="modal-card">
       <section id="scenario-step">
-        <h2>Create the scenario</h2>
+        <h2>创建剧情</h2>
         <form id="scenario-form">
           <div class="config-toolbar">
-            <button type="button" id="load-config-button">Load config file</button>
-            <button type="button" id="export-config-button">Export config file</button>
+            <button type="button" id="load-config-button">导入配置</button>
+            <button type="button" id="export-config-button">导出配置</button>
             <input type="file" id="load-config-input" accept=".json,application/json" hidden>
           </div>
-          <label id="cast-label">Characters — create the cast; optionally pick the one you play (leave empty to observe):</label>
+          <label id="cast-label">角色名单——创建角色池；可选勾选你要扮演的角色（留空则旁观）：</label>
           <div id="character-editor"></div>
-          <button type="button" id="add-character">+ Add character</button>
-          <label class="check-label"><input type="checkbox" id="random-turn-order" checked> Randomize the action input order every round</label>
-          <label for="scenario-input">Describe the setting, characters, and opening situation</label>
+          <button type="button" id="add-character">+ 添加角色</button>
+          <label class="check-label"><input type="checkbox" id="random-turn-order" checked> 每轮随机打乱行动顺序</label>
+          <label for="scenario-input">描述世界观、角色与开场情境</label>
           <textarea id="scenario-input" maxlength="500000" required></textarea>
-          <label for="guidance-input">Additional DM guidance (optional)</label>
+          <label for="guidance-input">主持私密指引（可选）</label>
           <textarea id="guidance-input" maxlength="500000"
-            placeholder="Example: Include a small possibility of something extremely random happening whenever players act."></textarea>
+            placeholder="例：每当玩家行动时，保留一点极小概率发生极度随机事件的可能。"></textarea>
           <details class="config-section">
-            <summary>In-game clock &amp; time rules (optional)</summary>
-            <label class="check-label"><input type="checkbox" id="time-enabled"> Enable the authoritative clock</label>
+            <summary>游戏内时钟与耗时规则（可选）</summary>
+            <label class="check-label"><input type="checkbox" id="time-enabled"> 启用权威时钟</label>
             <div id="time-config-fields" hidden>
               <div class="field-row">
-                <label for="time-start-day">Start day</label>
+                <label for="time-start-day">起始日</label>
                 <input id="time-start-day" type="number" min="0" max="100000" value="1">
-                <label for="time-start-time">Start time</label>
+                <label for="time-start-time">起始时间</label>
                 <input id="time-start-time" type="time" value="06:30">
               </div>
               <div class="field-row">
-                <label for="time-max-elapsed">Max minutes per round</label>
+                <label for="time-max-elapsed">每轮最大耗时（分钟）</label>
                 <input id="time-max-elapsed" type="number" min="0" max="525600" value="600">
-                <label for="time-default-elapsed">Default when AI omits it</label>
+                <label for="time-default-elapsed">AI 未给出时的默认值</label>
                 <input id="time-default-elapsed" type="number" min="0" max="525600" value="15">
               </div>
-              <p class="config-hint">Reference durations — the AI estimates each round's elapsed minutes from these:</p>
+              <p class="config-hint">耗时参考——AI 据此估算每轮耗时：</p>
               <div id="time-rules-editor"></div>
-              <button type="button" id="add-time-rule">+ Add duration rule</button>
+              <button type="button" id="add-time-rule">+ 添加耗时规则</button>
             </div>
           </details>
           <details class="config-section">
-            <summary>Fixed-time events (optional, requires the clock)</summary>
-            <p class="config-hint">Each event fires exactly once when the clock reaches its time, for every online player simultaneously.</p>
+            <summary>定时事件（可选，需启用时钟）</summary>
+            <p class="config-hint">每个事件在时钟到达指定时刻时，对所有在线玩家同时触发一次。</p>
             <div id="events-editor"></div>
-            <button type="button" id="add-event">+ Add event</button>
+            <button type="button" id="add-event">+ 添加事件</button>
           </details>
           <details class="config-section">
-            <summary>World book / lorebook (optional)</summary>
-            <p class="config-hint">Entries are injected into the AI's context only when their keywords appear in recent play. Never shown to players.</p>
+            <summary>世界书（可选）</summary>
+            <p class="config-hint">条目只在关键词出现在近期剧情时注入 AI 上下文，绝不展示给玩家。</p>
             <div id="lorebook-editor"></div>
-            <button type="button" id="add-lorebook">+ Add entry</button>
+            <button type="button" id="add-lorebook">+ 添加条目</button>
           </details>
           <details class="config-section">
-            <summary>Prompt blocks &amp; sampling (advanced)</summary>
-            <p class="config-hint">Ordered instruction blocks placed at fixed prompt positions, plus generation sampling overrides. Backstage material; never shown to players.</p>
+            <summary>提示块与采样（高级）</summary>
+            <p class="config-hint">按固定位置注入的有序提示块与生成采样参数。后台材料，绝不展示给玩家。</p>
             <div class="field-row">
-              <label for="sampling-temperature">temperature (0–2, empty = default)</label>
+              <label for="sampling-temperature">temperature（0–2，留空=默认）</label>
               <input id="sampling-temperature" type="number" min="0" max="2" step="0.01">
-              <label for="sampling-top-p">top_p (0–1, empty = default)</label>
+              <label for="sampling-top-p">top_p（0–1，留空=默认）</label>
               <input id="sampling-top-p" type="number" min="0" max="1" step="0.01">
             </div>
-            <p class="config-hint">Positions: system = after the core system prompt · scenario = after the scenario/guidance · output = right before generation.</p>
+            <p class="config-hint">位置说明：system＝核心系统提示之后 · scenario＝剧情/指引之后 · output＝生成之前。</p>
             <div id="prompt-blocks-editor"></div>
-            <button type="button" id="add-prompt-block">+ Add prompt block</button>
+            <button type="button" id="add-prompt-block">+ 添加提示块</button>
           </details>
-          <button type="submit" id="scenario-submit">Generate scenario</button>
+          <button type="submit" id="scenario-submit">生成剧情</button>
         </form>
       </section>
       <section id="lobby-step" hidden>
-        <h2>Scenario ready</h2>
-        <p>Share the invite code so players can join. Start when everyone is ready.</p>
+        <h2>剧情就绪</h2>
+        <p>把邀请码发给玩家，大家到齐后开始。</p>
         <div id="invite-box">
-          <span>Invite code:</span>
+          <span>邀请码：</span>
           <strong id="invite-code">------</strong>
-          <button type="button" id="copy-invite">Copy</button>
+          <button type="button" id="copy-invite">复制</button>
         </div>
         <div id="lobby-roster" aria-label="Players in the lobby">
           <p id="lobby-player-count" role="status"></p>
           <ul id="lobby-player-list"></ul>
         </div>
-        <button id="start-button" type="button">Start game</button>
-        <button id="edit-scenario-button" type="button" class="secondary">Edit scenario &amp; config</button>
+        <button id="start-button" type="button">开始游戏</button>
+        <button id="edit-scenario-button" type="button" class="secondary">编辑剧情与配置</button>
       </section>
       <p id="host-status" role="status"></p>
-      <button id="close-room-button" type="button">Close room</button>
+      <button id="close-room-button" type="button">关闭房间</button>
     </div>
   </div>
 
   <div id="dm-thinking" hidden role="status">
     <span class="thinking-orb" aria-hidden="true"></span>
-    The Dungeon Master is weaving the outcome…
+    主持人正在编织结局……
   </div>
   <div id="character-card-modal" class="modal" role="dialog" aria-modal="true" hidden>
     <form id="character-card-form" class="modal-card">
@@ -209,8 +209,8 @@
       <label for="character-card-example">示例台词</label>
       <textarea id="character-card-example" maxlength="10000" rows="2"
         placeholder="例：“航海不是浪漫的事。航海是运力、成本和补给线的数学。”"></textarea>
-      <button type="submit" id="character-card-save">Save</button>
-      <button type="button" id="character-card-close" class="secondary">Close</button>
+      <button type="submit" id="character-card-save">保存</button>
+      <button type="button" id="character-card-close" class="secondary">关闭</button>
     </form>
   </div>
   <div id="key-required-modal" class="modal" role="dialog" aria-modal="true" hidden>
@@ -223,13 +223,13 @@
       <p id="key-required-error" class="error" role="alert"></p>
     </form>
   </div>
-  <button id="end-game-button" type="button" hidden>End game</button>
-  <button id="retry-round-button" type="button" hidden>Retry paused round</button>
-  <button id="leave-room-button" type="button" hidden>Leave room</button>
+  <button id="end-game-button" type="button" hidden>结束游戏</button>
+  <button id="retry-round-button" type="button" hidden>重试暂停回合</button>
+  <button id="leave-room-button" type="button" hidden>离开房间</button>
   <button id="character-card-button" type="button" hidden>我的角色卡</button>
   <button id="mobile-menu-button" type="button" hidden aria-label="Menu">⋯</button>
-  <div id="connection-status" role="status">Connecting...</div>
-  <script src="/static/js/app.js?v=rooms-20"></script>
+  <div id="connection-status" role="status">连接中…</div>
+  <script src="/static/js/app.js?v=rooms-21"></script>
 </body>
 
 </html>

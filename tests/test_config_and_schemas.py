@@ -85,6 +85,6 @@ def test_context_overflow_preserves_history_without_fifo_loss() -> None:
     ]
 
     original = list(manager.history)
-    with pytest.raises(LLMResolutionError, match="memory preserved"):
+    with pytest.raises(LLMResolutionError, match="记忆已保留"):
         manager._bounded_messages({"role": "user", "content": "Act"})
     assert manager.history == original

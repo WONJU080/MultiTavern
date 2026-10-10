@@ -122,7 +122,7 @@ def test_same_name_allowed_across_rooms_but_not_within_one():
                     receive_until(player_two, "auth_ok")
                     with client.websocket_connect(f"/ws/{uuid4()}") as duplicate:
                         join_room(duplicate, str(uuid4()), code_a, "arxs", "Arxs")
-                        assert "already online" in duplicate.receive_json()["payload"]["msg"]
+                        assert "该名字已在线" in duplicate.receive_json()["payload"]["msg"]
 
 
 def test_joining_an_unknown_room_reports_a_clear_error():
@@ -131,7 +131,7 @@ def test_joining_an_unknown_room_reports_a_clear_error():
     with TestClient(app) as client:
         with client.websocket_connect(f"/ws/{uuid4()}") as socket:
             join_room(socket, str(uuid4()), "ZZZ-ZZZ", "Arxs", "Arxs")
-            assert "Room not found" in socket.receive_json()["payload"]["msg"]
+            assert "找不到该房间" in socket.receive_json()["payload"]["msg"]
 
 
 def test_cast_cap_is_enforced_per_room():
@@ -153,7 +153,7 @@ def test_cast_cap_is_enforced_per_room():
                     },
                 }
             )
-            assert "At most 2 characters" in receive_until(host, "error")["payload"]["msg"]
+            assert "最多允许 2 个角色" in receive_until(host, "error")["payload"]["msg"]
             host.send_json(
                 {
                     "event_type": "scenario_init",
@@ -189,9 +189,9 @@ def test_host_ending_the_game_closes_the_room():
             host.send_json({"event_type": "start_game", "data": {}})
             receive_until(host, "turn_directive")
             host.send_json({"event_type": "end_game", "data": {}})
-            assert receive_until(host, "game_ended")["payload"]["msg"] == "The host ended the game."
+            assert receive_until(host, "game_ended")["payload"]["msg"] == "房主结束了本局游戏。"
             assert (
-                receive_until(host, "room_closed")["payload"]["msg"] == "The host ended the game."
+                receive_until(host, "room_closed")["payload"]["msg"] == "房主结束了本局游戏。"
             )
             assert normalize_invite_code(code) not in app.state.registry.rooms
 
@@ -239,10 +239,10 @@ def test_host_can_close_a_lobby_room(tmp_path: Path):
         engine = GameEngine(sender, FakeResolver())
         engine.transcript = GameTranscript(tmp_path)
         await engine.host_join("host", {"name": "Host"})
-        with pytest.raises(ValueError, match="not accepting new players"):
+        with pytest.raises(ValueError, match="本局已不接受新玩家"):
             await engine.player_join("p1", {"name": "One", "character": "Ghost"})
         await engine.process_payload("host", payload("close_room"))
         assert engine.state is GameState.ENDED
-        assert sender.events_of_type("game_ended")[-1].payload["msg"] == "The host closed the room."
+        assert sender.events_of_type("game_ended")[-1].payload["msg"] == "房主关闭了房间。"
 
     asyncio.run(run())

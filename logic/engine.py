@@ -199,15 +199,12 @@ class GameEngine(LobbyMixin):
             # remains spinning forever. Do not expose provider bodies/private guidance.
             LOGGER.warning("Inference job failed generation=%d error=%s", epoch, type(exc).__name__)
             connection_hint = (
-                "Could not connect to the LLM backend. Check that the model server is running "
-                "and its configured endpoint is reachable before retrying. "
+                "无法连接 AI 后端，请确认模型服务已运行且 endpoint 可访问后再重试。 "
                 if isinstance(exc, LLMBackendUnavailableError)
                 else ""
             )
             if isinstance(exc, LLMKeyRequiredError):
-                connection_hint = (
-                    "This room has no usable API key. The host can provide one to continue. "
-                )
+                connection_hint = "该房间没有可用的 API Key，请房主提供后再继续。 "
             async with self.effects_lock:
                 async with self.lock:
                     if not self._job_current(epoch):
@@ -221,10 +218,9 @@ class GameEngine(LobbyMixin):
                             "msg": (
                                 connection_hint
                                 + (
-                                    "Round paused; actions and dice are retained. "
-                                    "The host can retry or end."
+                                    "本轮已暂停，行动与骰点均已保留，房主可以重试或结束。"
                                     if self.round_paused
-                                    else "Could not prepare the game. Please try again."
+                                    else "无法准备游戏，请再试一次。"
                                 )
                             ),
                             "round_paused": self.round_paused,
@@ -317,7 +313,7 @@ class GameEngine(LobbyMixin):
         self,
         *,
         close_resolver: bool = True,
-        reason: str = "The host ended the game.",
+        reason: str = "房主结束了本局游戏。",
         notify: bool = True,
     ) -> None:
         """Terminate the session, cancel inference and finalize the transcript."""
@@ -448,7 +444,7 @@ class GameEngine(LobbyMixin):
             await self.sender.broadcast_global(self._player_roster_event())
             return
         await self.sender.broadcast_global(
-            ServerEvent(type="system_msg", payload={"msg": f"{player.name} disconnected."})
+            ServerEvent(type="system_msg", payload={"msg": f"{player.name} 已断开连接。"})
         )
         await self.sender.broadcast_global(self._player_roster_event())
         if directive is not None:
@@ -458,11 +454,11 @@ class GameEngine(LobbyMixin):
         """Raise if the client cannot submit an action in the current state."""
         player = self.players.get(client_id)
         if player is None or not player.is_connected:
-            raise ValueError("Authenticate before submitting an action.")
+            raise ValueError("请先加入房间再提交行动。")
         if self.state is not GameState.ACTIVE_TURN:
-            raise ValueError("Actions are blocked while no turn is active.")
+            raise ValueError("当前没有进行中的回合，无法提交行动。")
         if client_id != self.active_player_id:
-            raise ValueError("It is not your turn.")
+            raise ValueError("还没轮到你。")
 
     async def _submit_action(self, client_id: str, data: dict[str, object]) -> None:
         """Validate and buffer a player action, launching a round when complete."""
@@ -525,14 +521,14 @@ class GameEngine(LobbyMixin):
                 return
             voter = self.players.get(client_id)
             if voter is None or not voter.is_connected:
-                raise ValueError("Authenticate before voting.")
+                raise ValueError("请先加入房间再投票。")
             if self.state is not GameState.ACTIVE_TURN:
-                raise ValueError("Votes are only allowed during an active turn.")
+                raise ValueError("只能在回合进行中投票。")
             target = self.active_player_id
             if target is None:
-                raise ValueError("There is no active turn to skip.")
+                raise ValueError("当前没有可跳过的回合。")
             if target == client_id:
-                raise ValueError("You cannot vote to skip yourself.")
+                raise ValueError("你不能投票跳过自己。")
             target_player = self.players[target]
             eligible = {
                 player_id
@@ -540,7 +536,7 @@ class GameEngine(LobbyMixin):
                 if player_id != target and player.is_connected and player.character_name is not None
             }
             if not eligible:
-                raise ValueError("No other players are online to vote.")
+                raise ValueError("没有其他在线玩家可以投票。")
             votes = self.skip_votes.setdefault(target, set())
             votes.add(client_id)
             vote_event = ServerEvent(
@@ -579,8 +575,8 @@ class GameEngine(LobbyMixin):
                     type="system_msg",
                     payload={
                         "msg": (
-                            f"Vote passed: {removed_target}'s input was skipped and "
-                            "their player was removed from the game. They may rejoin."
+                            f"投票通过：{removed_target} 的本轮输入被跳过，"
+                            "其玩家已被移出游戏，可以重新加入。"
                         )
                     },
                 )
@@ -691,11 +687,11 @@ class GameEngine(LobbyMixin):
                 return
             player = self.players.get(client_id)
             if player is None or not player.is_host:
-                raise ValueError("Only the host can retry a paused round.")
+                raise ValueError("只有房主可以重试暂停的回合。")
             if not self.round_paused or self.pending_resolution is None:
-                raise ValueError("No paused round to retry.")
+                raise ValueError("没有可重试的暂停回合。")
             if self.inference_task is not None and not self.inference_task.done():
-                raise ValueError("The previous request is still finishing.")
+                raise ValueError("上一轮请求仍在处理中。")
             self._launch_round_locked(self.round_buffer.copy(), retry=True)
         LOGGER.info("Paused round retry accepted round=%d", self.round_counter + 1)
 
@@ -749,7 +745,7 @@ class GameEngine(LobbyMixin):
                 if set(plan.rolls) != set(llm_actions) or not set(plan.hidden_rolls) <= {
                     name for name, required in plan.rolls.items() if required
                 }:
-                    raise LLMResolutionError("Invalid dice plan participants.")
+                    raise LLMResolutionError("骰点计划参与者无效。")
                 pending["hidden"] = set(plan.hidden_rolls)
                 pending["dice"] = {
                     name: roll_d100() for name, required in plan.rolls.items() if required
@@ -784,7 +780,7 @@ class GameEngine(LobbyMixin):
             or not resolution.global_narrative.strip()
             or any(not text.strip() for text in resolution.player_resolutions.values())
         ):
-            raise LLMResolutionError("Invalid resolution participants or empty narrative.")
+            raise LLMResolutionError("结算参与者无效或全局叙述为空。")
         public_dice = {
             name: value for name, value in pending["dice"].items() if name not in pending["hidden"]
         }
@@ -988,10 +984,7 @@ class GameEngine(LobbyMixin):
                         ServerEvent(
                             type="removed",
                             payload={
-                                "msg": (
-                                    "You were removed from the game by a unanimous skip "
-                                    "vote. Rejoin the room to continue playing."
-                                )
+                                "msg": ("你被全员投票跳过并移出了游戏，重新加入房间即可继续。")
                             },
                         ),
                     )
@@ -1008,13 +1001,13 @@ class GameEngine(LobbyMixin):
         if before_raw is not None and (
             isinstance(before_raw, bool) or not isinstance(before_raw, int)
         ):
-            raise ValueError("'before_round' must be an integer.")
+            raise ValueError("'before_round' 必须是整数。")
         async with self.lock:
             if not CURRENT_OWNER.get()():
                 return
             player = self.players.get(client_id) or self.pending_players.get(client_id)
             if player is None or not player.is_connected:
-                raise ValueError("Authenticate before requesting history.")
+                raise ValueError("请先加入房间再请求历史。")
         compact_code = self.room_code.replace("-", "") if self.room_code else ""
         rounds, has_more = await self.history_store.load_before(compact_code, before_raw)
         await self.sender.send_personal(

@@ -214,7 +214,7 @@ def test_failed_resolution_retries_identical_rolls_and_keeps_hidden_checks_priva
         await engine.wait_for_inference()
         assert engine.round_paused
         await engine.process_payload("player", payload("retry_round"))
-        assert "Only the host" in sender.events_of_type("error")[-1].payload["msg"]
+        assert "只有房主" in sender.events_of_type("error")[-1].payload["msg"]
         resolver.fail_round = False
         await engine.process_payload("host", payload("retry_round"))
         await engine.wait_for_inference()
@@ -406,7 +406,7 @@ def test_disconnect_triggered_round_reports_backend_outage_and_retries(tmp_path,
         assert engine.round_paused
         assert len(engine.round_buffer) == 2
         message = sender.events_of_type("error")[-1].payload["msg"]
-        assert "Could not connect to the LLM backend" in message
+        assert "无法连接 AI 后端" in message
         assert "PRIVATE" not in message
         monkeypatch.setattr(resolver, "plan_dice", original_plan)
         await engine.process_payload("host", payload("retry_round"))

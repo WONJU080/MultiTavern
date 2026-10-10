@@ -31,10 +31,10 @@ def test_disconnect_grace_defers_departure_until_timeout(tmp_path):
         gone["flag"] = True
         await asyncio.sleep(0.05)
         assert engine.players["host"].is_connected
-        assert sender.events_of_type("system_msg")[-1].payload["msg"] != "Host disconnected."
+        assert sender.events_of_type("system_msg")[-1].payload["msg"] != "Host 已断开连接。"
         await asyncio.sleep(0.3)
         assert not engine.players["host"].is_connected
-        assert sender.events_of_type("system_msg")[-1].payload["msg"] == "Host disconnected."
+        assert sender.events_of_type("system_msg")[-1].payload["msg"] == "Host 已断开连接。"
         await engine.shutdown()
 
     asyncio.run(run())
@@ -67,7 +67,7 @@ def test_reconnecting_within_grace_avoids_departure(tmp_path):
         )
         await asyncio.sleep(0.3)
         assert engine.players["host"].is_connected
-        assert sender.events_of_type("system_msg")[-1].payload["msg"] != "Host disconnected."
+        assert sender.events_of_type("system_msg")[-1].payload["msg"] != "Host 已断开连接。"
         await engine.shutdown()
 
     asyncio.run(run())

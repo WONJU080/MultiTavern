@@ -145,7 +145,7 @@ def test_output_echoing_a_block_is_rejected():
     async def run():
         manager = build_manager(client)
         manager.set_prompt_blocks([PromptBlock(content=secret, position="output")])
-        with pytest.raises(LLMResolutionError, match="disclosed private"):
+        with pytest.raises(LLMResolutionError, match="泄露了私密指引"):
             await manager.generate_resolution({"Alice": "Wait"})
 
     asyncio.run(run())
@@ -205,7 +205,7 @@ def test_invalid_blocks_reject_scenario(tmp_path):
             ),
         )
         error = sender.events_of_type("error")[-1].payload["msg"]
-        assert "Unknown prompt block position" in error
+        assert "未知的提示块位置" in error
         await engine.shutdown()
 
     asyncio.run(run())

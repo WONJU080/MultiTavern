@@ -155,12 +155,12 @@ def test_card_edits_are_rejected_without_ownership(tmp_path):
         await engine.player_join("viewer", {"name": "Viewer"})
         await engine.process_payload("viewer", payload("character_update", personality="偷改"))
         error = sender.events_of_type("error")[-1].payload["msg"]
-        assert "not playing a character" in error
+        assert "还没有扮演任何角色" in error
         # Simulate a seat whose claim is held by a different name.
         engine.claims["Player"] = "SomeoneElse"
         await engine.process_payload("player", payload("character_update", personality="抢改"))
         error = sender.events_of_type("error")[-1].payload["msg"]
-        assert "do not own" in error
+        assert "这不是你认领的角色" in error
         card = next(char for char in engine.cast if char.name == "Host")
         assert card.personality == "稳重"
         await engine.shutdown()

@@ -220,7 +220,7 @@ const MAX_CHAT_ENTRIES = 1000;
 
 function send(eventType, data) {
     if (ws.readyState !== WebSocket.OPEN) {
-        showError("The server connection is not open.");
+        showError("服务器连接未建立。");
         return false;
     }
     ws.send(JSON.stringify({ event_type: eventType, data }));
@@ -256,7 +256,7 @@ function startRound(roundNumber) {
     elements.log.querySelectorAll(".current-round").forEach((entry) => {
         entry.classList.remove("current-round");
     });
-    appendText(elements.log, `Round ${roundNumber}:`, "round-heading current-round");
+    appendText(elements.log, `第 ${roundNumber} 回合：`, "round-heading current-round");
 }
 
 function markRoundComplete() {
@@ -280,7 +280,7 @@ function renderPlayers(payload = {}) {
     const characters = payload.characters || [];
     const players = payload.players || [];
     const connected = players.filter((player) => player.connected).length;
-    elements.lobbyPlayerCount.textContent = `${connected} of ${players.length} players connected`;
+    elements.lobbyPlayerCount.textContent = `在线 ${connected}/${players.length} 人`;
     const spectators = players.filter((player) => !player.character);
     [elements.playerList, elements.lobbyPlayerList].forEach((list) => {
         list.replaceChildren();
@@ -299,8 +299,8 @@ function renderPlayers(payload = {}) {
             const status = document.createElement("span");
             status.className = "player-presence-label";
             status.textContent = char.claimed_by
-                ? (char.connected ? "Connected" : "Disconnected")
-                : "Unclaimed";
+                ? (char.connected ? "在线" : "离线")
+                : "未认领";
             item.append(dot, name, status);
             list.appendChild(item);
         });
@@ -314,7 +314,7 @@ function renderPlayers(payload = {}) {
             name.textContent = `${player.name} · 观众`;
             const status = document.createElement("span");
             status.className = "player-presence-label";
-            status.textContent = player.connected ? "Connected" : "Disconnected";
+            status.textContent = player.connected ? "在线" : "离线";
             item.append(dot, name, status);
             list.appendChild(item);
         });
@@ -366,7 +366,7 @@ function appendScenario(scenario) {
     entry.className = "state-entry opening-entry opening-scenario";
     const label = document.createElement("strong");
     label.className = "state-round-label";
-    label.textContent = "Opening scenario";
+    label.textContent = "开场剧情";
     const narrative = document.createElement("p");
     narrative.className = "state-narrative";
     narrative.textContent = scenario;
@@ -384,7 +384,7 @@ function appendState(text, roundNumber = null) {
 
     const label = document.createElement("strong");
     label.className = "state-round-label";
-    label.textContent = roundNumber ? `Round ${roundNumber} result` : "Opening scenario";
+    label.textContent = roundNumber ? `第 ${roundNumber} 回合结果` : "开场剧情";
 
     const narrative = document.createElement("p");
     narrative.className = "state-narrative";
@@ -405,7 +405,7 @@ function showError(message) {
     } else {
         appendText(
             elements.chatMessages,
-            `Error: ${message}`,
+            `错误：${message}`,
             "chat-entry error",
             MAX_CHAT_ENTRIES,
         );
@@ -435,8 +435,8 @@ function applyTurn(activePlayerId, activePlayerName) {
     const ownTurn = activePlayerId === clientId;
     elements.actionInput.disabled = !ownTurn;
     elements.actionInput.placeholder = ownTurn
-        ? "Enter your action..."
-        : `Waiting for ${activePlayerName || "the next turn"}...`;
+        ? "输入你的行动…"
+        : `等待 ${activePlayerName || "下一位玩家"}…`;
     if (ownTurn) {
         elements.actionInput.focus();
     }
@@ -472,7 +472,7 @@ function roomWasClosed(message) {
     ownCharacterCard = null;
     elements.loginModal.hidden = false;
     elements.loginError.textContent = message;
-    elements.connectionStatus.textContent = "Disconnected";
+    elements.connectionStatus.textContent = "离线";
 }
 
 function wasRemoved(message) {
@@ -496,11 +496,11 @@ function wasRemoved(message) {
     ownCharacterCard = null;
     elements.loginModal.hidden = false;
     elements.loginError.textContent = message;
-    elements.connectionStatus.textContent = "Connected — rejoin to play";
+    elements.connectionStatus.textContent = "已连接——重新加入即可继续游戏";
 }
 
 function leaveRoom() {
-    if (!window.confirm("Leave this room? It keeps running and you can rejoin with the invite code.")) {
+    if (!window.confirm("离开该房间？房间会继续运行，你可以用邀请码重新加入。")) {
         return;
     }
     closeMobileMenu();
@@ -520,7 +520,7 @@ function leaveRoom() {
     playerColors.clear();
     lastStartedRound = 0;
     oldestLoadedRound = null;
-    elements.title.textContent = "Awaiting scenario initialization...";
+    elements.title.textContent = "等待剧情初始化…";
     elements.grid.hidden = true;
     elements.chatInput.disabled = true;
     elements.actionInput.disabled = true;
@@ -536,8 +536,8 @@ function leaveRoom() {
     elements.keyRequiredModal.hidden = true;
     ownCharacterCard = null;
     elements.loginModal.hidden = false;
-    elements.loginError.textContent = "You left the room. It is still running; rejoin with the invite code.";
-    elements.connectionStatus.textContent = "Left the room";
+    elements.loginError.textContent = "你已离开房间，它仍在运行，可用邀请码重新加入。";
+    elements.connectionStatus.textContent = "已离开房间";
     if (ws && ws.readyState === WebSocket.OPEN) {
         ws.close();
     }
@@ -635,7 +635,7 @@ function ensureHistoryAnchor() {
     const button = document.createElement("button");
     button.type = "button";
     button.id = "history-earlier-button";
-    button.textContent = "Load earlier rounds";
+    button.textContent = "加载更早的回合";
     button.addEventListener("click", requestEarlierRounds);
     anchor.appendChild(button);
     const opening = elements.log.querySelector(".opening-scenario");
@@ -650,7 +650,7 @@ function requestEarlierRounds() {
         return;
     }
     button.disabled = true;
-    button.textContent = "Loading...";
+    button.textContent = "加载中…";
     send("history_request", { before_round: oldestLoadedRound });
 }
 
@@ -684,7 +684,7 @@ function renderEarlierRounds(records) {
         entry.className = "state-entry";
         const label = document.createElement("strong");
         label.className = "state-round-label";
-        label.textContent = `Round ${record.round_number} result`;
+        label.textContent = `第 ${record.round_number} 回合结果`;
         const narrative = document.createElement("p");
         narrative.className = "state-narrative";
         narrative.textContent = record.global_narrative;
@@ -712,7 +712,7 @@ function renderEarlierRounds(records) {
     trimContainer(elements.log, MAX_LOG_ENTRIES);
     if (button) {
         button.disabled = false;
-        button.textContent = "Load earlier rounds";
+        button.textContent = "加载更早的回合";
     }
 }
 
@@ -747,7 +747,7 @@ function applySnapshot(payload) {
             if (button) {
                 button.hidden = false;
                 button.disabled = false;
-                button.textContent = "Load earlier rounds";
+                button.textContent = "加载更早的回合";
             }
         } else if (payload.completed_round_number && payload.scenario_state) {
             appendState(payload.scenario_state, payload.completed_round_number);
@@ -759,11 +759,11 @@ function applySnapshot(payload) {
     }
     if (payload.catchup && payload.catchup.missed_minutes > 0) {
         const missed = payload.catchup.missed_events.length
-            ? ` Missed events: ${payload.catchup.missed_events.join(", ")}.`
+            ? ` 错过的全局事件：${payload.catchup.missed_events.join(", ")}。`
             : "";
         appendText(
             elements.chatMessages,
-            `You were offline from ${payload.catchup.from} to ${payload.catchup.to} (${payload.catchup.missed_minutes} minutes).${missed}`,
+            `你在 ${payload.catchup.from} 到 ${payload.catchup.to} 期间离线（游戏内 ${payload.catchup.missed_minutes} 分钟）。${missed}`,
             "chat-entry",
             MAX_CHAT_ENTRIES,
         );
@@ -806,7 +806,7 @@ function handleMessage(message) {
         roomClosed = false;
         leftRoom = false;
         elements.chatInput.disabled = false;
-        elements.connectionStatus.textContent = "Connected";
+        elements.connectionStatus.textContent = "在线";
         elements.loginModal.hidden = true;
         elements.grid.hidden = false;
         elements.leaveRoomButton.hidden = false;
@@ -823,7 +823,7 @@ function handleMessage(message) {
         elements.keyRequiredError.textContent = "";
         appendText(
             elements.chatMessages,
-            `System: ${payload.msg || "API Key updated."}`,
+            `系统：${payload.msg || "API Key 已更新。"}`,
             "chat-entry",
             MAX_CHAT_ENTRIES,
         );
@@ -897,16 +897,16 @@ function handleMessage(message) {
     } else if (type === "system_msg") {
         appendText(
             elements.chatMessages,
-            `System: ${payload.msg}`,
+            `系统：${payload.msg}`,
             "chat-entry",
             MAX_CHAT_ENTRIES,
         );
-        if (payload.msg === "The game has started.") {
+        if (payload.msg === "游戏已开始。") {
             elements.hostModal.hidden = true;
         }
     } else if (type === "token_usage") {
         elements.tokenUsage.hidden = false;
-        elements.tokenUsage.title = payload.counting_method || "Estimated token usage";
+        elements.tokenUsage.title = payload.counting_method || "估算的 token 用量";
         const used = Math.max(0, Number(payload.retained_context_tokens ?? payload.approximate_tokens) || 0);
         const limit = Math.max(1, Number(payload.context_window_size) || used || 1);
         const ratio = Math.min(1, used / limit);
@@ -914,7 +914,7 @@ function handleMessage(message) {
             `conic-gradient(var(--accent) ${ratio * 360}deg, var(--border) ${ratio * 360}deg)`;
         elements.tokenChart.setAttribute(
             "aria-label",
-            `Estimated retained context: ${used.toLocaleString()} of ${limit.toLocaleString()}`,
+            `估算的保留上下文：${used.toLocaleString()} / ${limit.toLocaleString()}`,
         );
         const formatTotal = (value) => value == null ? "unknown" : value.toLocaleString();
         const round = payload.round || {};
@@ -938,11 +938,11 @@ function handleMessage(message) {
         elements.actionInput.disabled = true;
         elements.endGameButton.hidden = true;
         elements.retryRoundButton.hidden = true;
-        appendText(elements.chatMessages, `System: ${payload.msg}`, "chat-entry", MAX_CHAT_ENTRIES);
+        appendText(elements.chatMessages, `系统：${payload.msg}`, "chat-entry", MAX_CHAT_ENTRIES);
     } else if (type === "room_closed") {
-        roomWasClosed(payload.msg || "This room was closed.");
+        roomWasClosed(payload.msg || "该房间已关闭。");
     } else if (type === "removed") {
-        wasRemoved(payload.msg || "You were removed from the game. Rejoin to continue playing.");
+        wasRemoved(payload.msg || "你已被移出游戏，重新加入即可继续。");
     } else if (type === "skip_vote") {
         elements.skipVoteStatus.textContent = `${payload.target}: ${payload.votes}/${payload.needed}`;
         if (payload.voter === myName) {
@@ -953,7 +953,7 @@ function handleMessage(message) {
         elements.hostModal.hidden = false;
         elements.endGameButton.hidden = true;
         elements.title.textContent = payload.title;
-        elements.hostStatus.textContent = `“${payload.title}” is ready.`;
+        elements.hostStatus.textContent = `「${payload.title}」已就绪。`;
         elements.scenarioStep.hidden = true;
         elements.lobbyStep.hidden = false;
         if (payload.characters) {
@@ -961,9 +961,9 @@ function handleMessage(message) {
         }
         elements.scenarioSubmit.disabled = false;
     } else if (type === "error") {
-        showError(payload.msg || "Unknown server error.");
+        showError(payload.msg || "未知的服务器错误。");
         if (!elements.keyRequiredModal.hidden) {
-            elements.keyRequiredError.textContent = payload.msg || "Unknown server error.";
+            elements.keyRequiredError.textContent = payload.msg || "未知的服务器错误。";
         }
         elements.scenarioSubmit.disabled = false;
         elements.startButton.disabled = false;
@@ -998,7 +998,7 @@ function connectSocket() {
         if (ws !== socket) return;
         clearTimeout(connectionTimer);
         reconnectAttempts = 0;
-        elements.connectionStatus.textContent = savedAuth ? "Rejoining..." : "Connected";
+        elements.connectionStatus.textContent = savedAuth ? "正在重新加入…" : "在线";
         if (savedAuth) {
             socket.send(JSON.stringify({ event_type: "join_room", data: savedAuth }));
         } else if (pendingRoomInfo) {
@@ -1024,11 +1024,11 @@ function connectSocket() {
         if (ws !== socket) return;
         clearTimeout(connectionTimer);
         authenticated = false;
-        elements.connectionStatus.textContent = "Reconnecting...";
+        elements.connectionStatus.textContent = "正在重连…";
         elements.actionInput.disabled = true;
         elements.chatInput.disabled = true;
         if (roomClosed) {
-            elements.connectionStatus.textContent = leftRoom ? "Left the room" : "Disconnected";
+            elements.connectionStatus.textContent = leftRoom ? "已离开房间" : "离线";
             return;
         }
         // Do not reconnect while the page is in the background: mobile systems
@@ -1042,7 +1042,7 @@ function connectSocket() {
     });
     socket.addEventListener("error", () => {
         if (ws !== socket) return;
-        elements.connectionStatus.textContent = "Connection error";
+        elements.connectionStatus.textContent = "连接错误";
     });
 }
 
@@ -1117,7 +1117,7 @@ elements.loginForm.addEventListener("submit", async (event) => {
             roomClosed = false;
             leftRoom = false;
             elements.joinStep.hidden = false;
-            elements.joinStatus.textContent = "Loading characters...";
+            elements.joinStatus.textContent = "正在加载角色…";
             elements.joinCharacterList.replaceChildren();
             if (ws.readyState !== WebSocket.OPEN) {
                 pendingRoomInfo = inviteCode;
@@ -1135,11 +1135,11 @@ function renderCharacterPicker(payload) {
     const characters = payload.characters || [];
     elements.joinCharacterList.replaceChildren();
     if (!payload.accepting_new) {
-        elements.joinStatus.textContent = "This room is not accepting new players.";
+        elements.joinStatus.textContent = "该房间不接受新玩家。";
         return;
     }
     if (!characters.length) {
-        elements.joinStatus.textContent = "The room has not defined its cast yet.";
+        elements.joinStatus.textContent = "该房间还未设定角色名单。";
         return;
     }
     elements.joinStatus.textContent = "";
@@ -1255,15 +1255,15 @@ function makeCharacterRow() {
     mine.type = "radio";
     mine.name = "host-character";
     mine.className = "character-mine";
-    mine.setAttribute("aria-label", "Play this character");
+    mine.setAttribute("aria-label", "扮演该角色");
     const name = document.createElement("input");
     name.className = "character-name";
     name.maxLength = 40;
-    name.placeholder = "Character name";
+    name.placeholder = "角色名";
     const description = document.createElement("input");
     description.className = "character-description";
     description.maxLength = 50000;
-    description.placeholder = "Description (optional)";
+    description.placeholder = "角色描述（可选）";
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "remove-character";
@@ -1324,7 +1324,7 @@ function makePromptBlockRow(block = {}) {
     const title = document.createElement("input");
     title.className = "prompt-block-title";
     title.maxLength = 80;
-    title.placeholder = "Block title (optional)";
+    title.placeholder = "块标题（可选）";
     title.value = block.title || "";
     const position = document.createElement("select");
     position.className = "prompt-block-position";
@@ -1342,12 +1342,12 @@ function makePromptBlockRow(block = {}) {
     const enabledCheck = document.createElement("input");
     enabledCheck.type = "checkbox";
     enabledCheck.checked = block.enabled !== false;
-    enabledLabel.append(enabledCheck, "on");
+    enabledLabel.append(enabledCheck, "启用");
     const content = document.createElement("textarea");
     content.className = "prompt-block-content";
     content.maxLength = 10000;
     content.rows = 3;
-    content.placeholder = "Instruction content";
+    content.placeholder = "指令内容";
     content.value = block.content || "";
     const remove = document.createElement("button");
     remove.type = "button";
@@ -1391,21 +1391,21 @@ function makeTimeRuleRow(activity = "", minimum = "", maximum = "") {
     const activityInput = document.createElement("input");
     activityInput.className = "rule-activity";
     activityInput.maxLength = 80;
-    activityInput.placeholder = "Activity (e.g. searching a room)";
+    activityInput.placeholder = "活动（例如 搜查房间）";
     activityInput.value = activity;
     const minInput = document.createElement("input");
     minInput.type = "number";
     minInput.min = 0;
     minInput.max = 525600;
     minInput.className = "rule-min";
-    minInput.placeholder = "min";
+    minInput.placeholder = "最少";
     minInput.value = minimum;
     const maxInput = document.createElement("input");
     maxInput.type = "number";
     maxInput.min = 0;
     maxInput.max = 525600;
     maxInput.className = "rule-max";
-    maxInput.placeholder = "max";
+    maxInput.placeholder = "最多";
     maxInput.value = maximum;
     const remove = document.createElement("button");
     remove.type = "button";
@@ -1423,7 +1423,7 @@ function makeEventRow(event = {}) {
     const name = document.createElement("input");
     name.className = "event-name";
     name.maxLength = 80;
-    name.placeholder = "Event name";
+    name.placeholder = "事件名";
     name.value = event.name || "";
     const day = document.createElement("input");
     day.type = "number";
@@ -1440,14 +1440,14 @@ function makeEventRow(event = {}) {
     const description = document.createElement("input");
     description.className = "event-description";
     description.maxLength = 10000;
-    description.placeholder = "What happens (backstage)";
+    description.placeholder = "将发生什么（后台）";
     description.value = event.description || "";
     const publicLabel = document.createElement("label");
     publicLabel.className = "check-label event-public";
     const publicCheck = document.createElement("input");
     publicCheck.type = "checkbox";
     publicCheck.checked = Boolean(event.public);
-    publicCheck.title = "Announce to all players";
+    publicCheck.title = "向全体玩家公布";
     publicLabel.append(publicCheck, "public");
     const remove = document.createElement("button");
     remove.type = "button";
@@ -1465,32 +1465,32 @@ function makeLorebookRow(entry = {}) {
     const title = document.createElement("input");
     title.className = "lorebook-title";
     title.maxLength = 80;
-    title.placeholder = "Title (optional)";
+    title.placeholder = "标题（可选）";
     title.value = entry.title || "";
     const keys = document.createElement("input");
     keys.className = "lorebook-keys";
     keys.maxLength = 1000;
-    keys.placeholder = "Keywords, comma separated";
+    keys.placeholder = "关键词，逗号分隔";
     keys.value = (entry.keys || []).join(", ");
     const content = document.createElement("textarea");
     content.className = "lorebook-content";
     content.maxLength = 10000;
     content.rows = 2;
-    content.placeholder = "Content inserted when a keyword appears";
+    content.placeholder = "关键词出现时注入的内容";
     content.value = entry.content || "";
     const order = document.createElement("input");
     order.type = "number";
     order.min = 0;
     order.max = 10000;
     order.className = "lorebook-order";
-    order.title = "Insertion order (higher = stronger influence)";
+    order.title = "插入顺序（越高影响越强）";
     order.value = entry.order ?? 0;
     const constantLabel = document.createElement("label");
     constantLabel.className = "check-label lorebook-constant";
     const constantCheck = document.createElement("input");
     constantCheck.type = "checkbox";
     constantCheck.checked = Boolean(entry.constant);
-    constantCheck.title = "Always active";
+    constantCheck.title = "常驻";
     constantLabel.append(constantCheck, "always");
     const remove = document.createElement("button");
     remove.type = "button";
@@ -1719,13 +1719,13 @@ elements.loadConfigInput.addEventListener("change", () => {
     reader.onload = () => {
         try {
             applyScenarioConfig(JSON.parse(String(reader.result)));
-            elements.hostStatus.textContent = "Config loaded.";
+            elements.hostStatus.textContent = "配置已导入。";
         } catch (error) {
             elements.hostStatus.textContent = `Could not load config: ${error.message}`;
         }
     };
     reader.onerror = () => {
-        elements.hostStatus.textContent = "Could not read the config file.";
+        elements.hostStatus.textContent = "无法读取配置文件。";
     };
     reader.readAsText(file);
     elements.loadConfigInput.value = "";
@@ -1733,7 +1733,7 @@ elements.loadConfigInput.addEventListener("change", () => {
 
 elements.exportConfigButton.addEventListener("click", () => {
     exportScenarioConfig();
-    elements.hostStatus.textContent = "Config exported.";
+    elements.hostStatus.textContent = "配置已导出。";
 });
 
 elements.timeEnabled.addEventListener("change", () => {
@@ -1753,13 +1753,13 @@ elements.scenarioForm.addEventListener("submit", (event) => {
     event.preventDefault();
     const { characters, hostCharacter } = collectCharacters();
     if (characters.some((char) => !char.name)) {
-        elements.hostStatus.textContent = "Every character needs a name.";
+        elements.hostStatus.textContent = "每个角色都需要名字。";
         return;
     }
     const timeConfig = collectTimeConfig();
     const events = collectEvents();
     if (events.length && !timeConfig.enabled) {
-        elements.hostStatus.textContent = "Fixed-time events require the in-game clock.";
+        elements.hostStatus.textContent = "定时事件需要启用游戏内时钟。";
         return;
     }
     if (
@@ -1778,7 +1778,7 @@ elements.scenarioForm.addEventListener("submit", (event) => {
         })
     ) {
         elements.scenarioSubmit.disabled = true;
-        elements.hostStatus.textContent = "Generating the scenario...";
+        elements.hostStatus.textContent = "正在生成剧情…";
     }
 });
 
@@ -1795,7 +1795,7 @@ elements.mobileMenuButton.addEventListener("click", () => {
 });
 
 elements.endGameButton.addEventListener("click", () => {
-    if (window.confirm("End this game for every player?")) {
+    if (window.confirm("为所有玩家结束本局游戏？")) {
         closeMobileMenu();
         send("end_game", {});
     }
@@ -1809,12 +1809,12 @@ elements.retryRoundButton.addEventListener("click", () => {
 elements.startButton.addEventListener("click", () => {
     if (send("start_game", {})) {
         elements.startButton.disabled = true;
-        elements.hostStatus.textContent = "Starting game...";
+        elements.hostStatus.textContent = "正在开始游戏…";
     }
 });
 
 elements.closeRoomButton.addEventListener("click", () => {
-    if (window.confirm("Close this room for every player?")) {
+    if (window.confirm("为所有玩家关闭该房间？")) {
         send("close_room", {});
     }
 });

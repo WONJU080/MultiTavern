@@ -158,7 +158,7 @@ def test_engine_reports_semantic_failure_and_retains_cost_on_retry(tmp_path, mon
             "previous_state": "A gate",
         }
         for expected in (1, 2):
-            with pytest.raises(LLMResolutionError, match="participants"):
+            with pytest.raises(LLMResolutionError, match="参与者无效"):
                 await engine._resolve_round(0)
             await engine._publish_usage()
             payload = sender.events_of_type("token_usage")[-1].payload

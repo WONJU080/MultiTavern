@@ -136,7 +136,7 @@ def test_full_round_is_strict_and_logged(tmp_path: Path) -> None:
         assert engine.opening_scenario == "Host, Player stand at a gate."
 
         await engine.process_payload("player", payload("action", action="Runs ahead"))
-        assert sender.events_of_type("error")[-1].payload["msg"] == "It is not your turn."
+        assert sender.events_of_type("error")[-1].payload["msg"] == "还没轮到你。"
 
         await engine.process_payload("host", payload("action", action="Opens the gate"))
         assert engine.active_player_id == "player"
@@ -224,7 +224,7 @@ def test_active_disconnect_injects_idle_and_advances(tmp_path: Path) -> None:
         player_result = state_event.payload["player_resolutions"]["Player"]
         assert "Resolved: [SYSTEM: Explain this player's in-world departure" in player_result
         assert player_result.endswith(IDLE_ACTION)
-        assert sender.events_of_type("system_msg")[-1].payload["msg"] == ("Player disconnected.")
+        assert sender.events_of_type("system_msg")[-1].payload["msg"] == ("Player 已断开连接。")
 
     asyncio.run(run())
 
@@ -270,13 +270,13 @@ def test_host_can_end_game_and_finalize_transcript(tmp_path: Path) -> None:
 
         await engine.process_payload("player", payload("end_game"))
         assert sender.events_of_type("error")[-1].payload["msg"] == (
-            "Only the host can end the game."
+            "只有房主可以结束游戏。"
         )
 
         await engine.process_payload("host", payload("end_game"))
         assert engine.state is GameState.ENDED
         assert sender.events_of_type("game_ended")[-1].payload["msg"] == (
-            "The host ended the game."
+            "房主结束了本局游戏。"
         )
         assert engine.transcript.path is not None
         assert "</html>" in engine.transcript.path.read_text(encoding="utf-8")
@@ -292,12 +292,12 @@ def test_host_join_rejects_invalid_names(tmp_path: Path) -> None:
         engine = GameEngine(sender, FakeResolver())
         engine.transcript = GameTranscript(tmp_path / "logs")
 
-        with pytest.raises(ValueError, match="'name' must contain"):
+        with pytest.raises(ValueError, match="必须是 1-40"):
             await engine.host_join("host", {"name": ""})
         assert not engine.players
         assert engine.state is GameState.AWAITING_HOST
 
-        with pytest.raises(ValueError, match="'name' must be a string"):
+        with pytest.raises(ValueError, match="必须是字符串"):
             await engine.host_join("host", {"name": 42})
         assert not engine.players
 

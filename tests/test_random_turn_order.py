@@ -42,7 +42,7 @@ def test_default_is_random_and_toggle_parses(tmp_path):
             ),
         )
         error = sender.events_of_type("error")[-1].payload["msg"]
-        assert "must be a boolean" in error
+        assert "必须是布尔值" in error
         await engine.shutdown()
 
     asyncio.run(run())

@@ -241,7 +241,7 @@ def test_unauthenticated_history_request_is_rejected():
             socket.send_json({"event_type": "history_request", "data": {}})
             error = socket.receive_json()
             assert error["type"] == "error"
-            assert "Create or join a room" in error["payload"]["msg"]
+            assert "请先创建或加入房间" in error["payload"]["msg"]
 
 
 def test_history_archive_is_deleted_when_the_room_closes(tmp_path, monkeypatch):

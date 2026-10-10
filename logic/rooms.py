@@ -91,17 +91,17 @@ def _parse_llm_request(data: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     if raw is None:
         return True, {}
     if not isinstance(raw, dict):
-        raise ValueError("'llm' must be an object.")
+        raise ValueError("'llm' 必须是对象。")
     mode = raw.get("mode", "borrow")
     if mode == "borrow":
         return True, {}
     if mode != "own":
-        raise ValueError("'llm.mode' must be 'own' or 'borrow'.")
+        raise ValueError("'llm.mode' 必须是 'own' 或 'borrow'。")
     overrides: dict[str, Any] = {"api_key": _parse_api_key(raw.get("api_key"))}
     provider = raw.get("provider")
     if provider is not None:
         if provider not in ("compatible", "openai"):
-            raise ValueError("'llm.provider' must be 'compatible' or 'openai'.")
+            raise ValueError("'llm.provider' 必须是 'compatible' 或 'openai'。")
         overrides["provider"] = provider
     endpoint = raw.get("endpoint")
     if endpoint is not None:
@@ -109,7 +109,7 @@ def _parse_llm_request(data: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     model_name = raw.get("model_name")
     if model_name is not None:
         if not isinstance(model_name, str) or not model_name.strip():
-            raise ValueError("'llm.model_name' must be a non-empty string.")
+            raise ValueError("'llm.model_name' 必须是非空字符串。")
         overrides["model_name"] = model_name.strip()[:200]
     return False, overrides
 
@@ -150,12 +150,12 @@ class Room:
 def normalize_invite_code(value: object) -> str:
     """Uppercase and strip separators from a client-supplied invite code."""
     if not isinstance(value, str):
-        raise ValueError("'invite_code' must be a string")
+        raise ValueError("'invite_code' 必须是字符串")
     compact = "".join(ch for ch in value.upper() if ch.isalnum())
     if not compact:
-        raise ValueError("'invite_code' must contain 1-12 characters")
+        raise ValueError("'invite_code' 必须是 1-12 个字符")
     if len(compact) > 12:
-        raise ValueError("'invite_code' must contain at most 12 characters")
+        raise ValueError("'invite_code' 最多 12 个字符")
     return compact
 
 
@@ -276,11 +276,11 @@ class RoomRegistry:
     async def provide_room_key(self, room: Room, client_id: str, data: dict[str, Any]) -> None:
         """Store and apply a fresh host API key for a key-blocked room."""
         if room.llm_meta is None:
-            raise ValueError("This room already uses a working API configuration.")
+            raise ValueError("该房间已有可用的 API 配置。")
         engine = room.engine
         player = engine.players.get(client_id)
         if player is None or not (player.is_host or client_id == engine.host_client_id):
-            raise ValueError("Only the host can provide this room's API key.")
+            raise ValueError("只有房主可以为该房间提供 API Key。")
         api_key = _parse_api_key(data.get("api_key"))
         overrides = {
             name: room.llm_meta[name]
@@ -302,7 +302,7 @@ class RoomRegistry:
         code = normalize_invite_code(invite_code)
         room = self.rooms.get(code)
         if room is None:
-            raise ValueError("Room not found. Check the invite code.")
+            raise ValueError("找不到该房间，请检查邀请码。")
         return room
 
     def touch(self, room: Room) -> None:
@@ -449,10 +449,10 @@ class RoomRegistry:
                     continue
                 if room.engine.state in _PRE_GAME_STATES:
                     timeout = settings.server.empty_room_timeout_seconds
-                    reason = "The room was closed after being empty."
+                    reason = "房间因无人已自动关闭。"
                 else:
                     timeout = settings.server.abandoned_room_timeout_seconds
-                    reason = "The room was closed after everyone disconnected."
+                    reason = "所有玩家断线后，房间已自动关闭。"
                 if timeout is None:
                     # Persistent rooms are never removed for being empty.
                     continue

@@ -241,7 +241,7 @@ def test_schema_output_and_margin_can_reject_a_short_message(kind, schema):
         client = FakeClient()
         manager = LLMContextManager(client)
         manager.context_window_size = getattr(settings.llm, f"{kind}_output_tokens") + 256
-        with pytest.raises(LLMResolutionError, match="budget"):
+        with pytest.raises(LLMResolutionError, match="预算"):
             await manager._parse([{"role": "user", "content": "x"}], schema, kind)
         assert not client.calls
 
@@ -413,7 +413,7 @@ def test_truncation_does_not_enter_history():
 
     async def run():
         manager = LLMContextManager(FakeClient(finish_reason="length"))
-        with pytest.raises(LLMResolutionError, match="token limit"):
+        with pytest.raises(LLMResolutionError, match="字数上限"):
             await manager.generate_scenario_title()
         assert manager.history == []
 
@@ -464,7 +464,7 @@ def test_public_output_leaking_secret_roll_or_guidance_is_rejected(leak):
         )
         manager = LLMContextManager(client)
         manager.set_genesis("North gate", "The invisible alarm triggers behind the gate.")
-        with pytest.raises(LLMResolutionError, match="disclosed"):
+        with pytest.raises(LLMResolutionError, match="泄露"):
             await manager.generate_resolution({"Alice": "wait"}, {"Alice": 17}, {"Alice"})
         assert manager.history == []
 
@@ -483,7 +483,7 @@ def test_request_timeout_preserves_history():
 
         client.beta.chat.completions.parse = blocked
         manager = LLMContextManager(client)
-        with pytest.raises(LLMResolutionError, match="failed"):
+        with pytest.raises(LLMResolutionError, match="超时"):
             await manager.generate_scenario_title()
         assert manager.history == []
 
@@ -538,7 +538,7 @@ def test_connection_failure_has_safe_category_and_retains_context():
         manager = LLMContextManager(client)
         manager.history = [{"role": "user", "content": "Established facts"}]
         original = list(manager.history)
-        with pytest.raises(LLMBackendUnavailableError, match="Could not connect") as error:
+        with pytest.raises(LLMBackendUnavailableError, match="无法连接") as error:
             await manager.plan_dice({"Alice": "Wait"})
         assert "PRIVATE" not in str(error.value)
         assert manager.history == original
@@ -636,7 +636,7 @@ def test_schema_invalid_response_gets_a_targeted_repair_attempt():
         assert result.player_resolutions == {"Alice": "Alice waits."}
         assert len(client.calls) == 2
         correction = client.calls[1]["messages"][-1]["content"]
-        assert "Invalid output schema" in correction
+        assert "不符合要求的结构" in correction
         assert "Correct the output contract" in correction
 
     asyncio.run(run())

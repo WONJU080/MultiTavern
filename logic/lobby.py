@@ -34,14 +34,14 @@ CURRENT_OWNER: ContextVar[Callable[[], bool]] = ContextVar("socket_owner", defau
 def parse_cast(value: object) -> list[Character]:
     """Validate the host-supplied cast of characters."""
     if not isinstance(value, list) or not value:
-        raise ValueError("'characters' must be a non-empty list")
+        raise ValueError("'characters' 必须是非空列表")
     if len(value) > settings.server.max_characters:
-        raise ValueError(f"At most {settings.server.max_characters} characters are allowed.")
+        raise ValueError(f"最多允许 {settings.server.max_characters} 个角色。")
     cast: list[Character] = []
     seen: set[str] = set()
     for entry in value:
         if not isinstance(entry, dict):
-            raise ValueError("Each character must be an object with 'name' and 'description'")
+            raise ValueError("每个角色必须是含 'name' 和 'description' 的对象")
         char_name = clean_text(entry.get("name"), "character name", 40)
         description = clean_optional_text(entry.get("description"), "character description", 50_000)
         personality = clean_optional_text(entry.get("personality"), "personality", 10_000)
@@ -51,7 +51,7 @@ def parse_cast(value: object) -> list[Character]:
         )
         folded = char_name.casefold()
         if folded in seen:
-            raise ValueError("Character names must be unique.")
+            raise ValueError("角色名不能重复。")
         seen.add(folded)
         cast.append(
             Character(
@@ -70,9 +70,9 @@ def _bounded_int(value: object, field: str, default: int, maximum: int) -> int:
     if value is None:
         return default
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"'{field}' must be an integer")
+        raise ValueError(f"'{field}' 必须是整数")
     if value < 0 or value > maximum:
-        raise ValueError(f"'{field}' must be between 0 and {maximum}")
+        raise ValueError(f"'{field}' 必须在 0 到 {maximum} 之间")
     return value
 
 
@@ -81,9 +81,9 @@ def parse_time_config(value: object) -> TimeConfig:
     if value is None:
         return TimeConfig()
     if not isinstance(value, dict):
-        raise ValueError("'time_config' must be an object")
+        raise ValueError("'time_config' 必须是对象")
     if not isinstance(value.get("enabled", False), bool):
-        raise ValueError("'time_config.enabled' must be a boolean")
+        raise ValueError("'time_config.enabled' 必须是布尔值")
     return TimeConfig(
         enabled=bool(value.get("enabled", False)),
         start_day=_bounded_int(value.get("start_day"), "time_config.start_day", 1, 100_000),
@@ -102,18 +102,18 @@ def parse_time_rules(value: object) -> list[TimeRule]:
     if value is None:
         return []
     if not isinstance(value, list):
-        raise ValueError("'time_rules' must be a list of activity objects")
+        raise ValueError("'time_rules' 必须是活动对象列表")
     if len(value) > 50:
-        raise ValueError("At most 50 time rules are allowed")
+        raise ValueError("最多允许 50 条耗时规则")
     rules: list[TimeRule] = []
     for entry in value:
         if not isinstance(entry, dict):
-            raise ValueError("Each time rule must be an object with 'activity'")
+            raise ValueError("每条耗时规则必须是含 'activity' 的对象")
         activity = clean_text(entry.get("activity"), "time rule activity", 80)
         minimum = _bounded_int(entry.get("minutes_min"), "minutes_min", 0, 525_600)
         maximum = _bounded_int(entry.get("minutes_max"), "minutes_max", 60, 525_600)
         if minimum > maximum:
-            raise ValueError(f"Time rule '{activity}': minutes_min exceeds minutes_max")
+            raise ValueError(f"耗时规则 '{activity}': minutes_min 不能大于 minutes_max")
         rules.append(TimeRule(activity=activity, minutes_min=minimum, minutes_max=maximum))
     return rules
 
@@ -147,21 +147,21 @@ def parse_events(value: object) -> list[TimedEvent]:
     if value is None:
         return []
     if not isinstance(value, list):
-        raise ValueError("'events' must be a list of event objects")
+        raise ValueError("'events' 必须是事件对象列表")
     if len(value) > 50:
-        raise ValueError("At most 50 scheduled events are allowed")
+        raise ValueError("最多允许 50 个定时事件")
     events: list[TimedEvent] = []
     seen: set[str] = set()
     for entry in value:
         if not isinstance(entry, dict):
-            raise ValueError("Each event must be an object with 'name'")
+            raise ValueError("每个事件必须是含 'name' 的对象")
         name = clean_text(entry.get("name"), "event name", 80)
         folded = name.casefold()
         if folded in seen:
-            raise ValueError("Event names must be unique.")
+            raise ValueError("事件名不能重复。")
         seen.add(folded)
         if not isinstance(entry.get("public", False), bool):
-            raise ValueError(f"Event '{name}': 'public' must be a boolean")
+            raise ValueError(f"事件 '{name}': 'public' 必须是布尔值")
         events.append(
             TimedEvent(
                 name=name,
@@ -179,23 +179,23 @@ def parse_lorebook(value: object) -> list[LorebookEntry]:
     if value is None:
         return []
     if not isinstance(value, list):
-        raise ValueError("'lorebook' must be a list of world-book entry objects")
+        raise ValueError("'lorebook' 必须是世界书条目对象列表")
     if len(value) > 200:
-        raise ValueError("At most 200 world-book entries are allowed")
+        raise ValueError("最多允许 200 条世界书条目")
     entries: list[LorebookEntry] = []
     for entry in value:
         if not isinstance(entry, dict):
-            raise ValueError("Each world-book entry must be an object with 'keys' and 'content'")
+            raise ValueError("每条世界书条目必须是含 'keys' 和 'content' 的对象")
         keys = entry.get("keys")
         if not isinstance(keys, list) or not keys or len(keys) > 100:
-            raise ValueError("Each world-book entry needs 1-100 keys")
+            raise ValueError("每条世界书条目需要 1-100 个关键词")
         cleaned_keys = [clean_text(key, "world-book key", 40) for key in keys]
         if len({key.casefold() for key in cleaned_keys}) != len(cleaned_keys):
-            raise ValueError("World-book keys must be unique within an entry.")
+            raise ValueError("同一条目内的关键词不能重复。")
         title = clean_optional_text(entry.get("title"), "world-book title", 80)
         for flag in ("enabled", "constant"):
             if not isinstance(entry.get(flag, True), bool):
-                raise ValueError(f"'{flag}' must be a boolean")
+                raise ValueError(f"'{flag}' 必须是布尔值")
         entries.append(
             LorebookEntry(
                 title=title,
@@ -214,18 +214,18 @@ def parse_prompt_blocks(value: object) -> list[PromptBlock]:
     if value is None:
         return []
     if not isinstance(value, list):
-        raise ValueError("'prompt_blocks' must be a list of instruction block objects")
+        raise ValueError("'prompt_blocks' 必须是提示块对象列表")
     if len(value) > 100:
-        raise ValueError("At most 100 prompt blocks are allowed")
+        raise ValueError("最多允许 100 个提示块")
     blocks: list[PromptBlock] = []
     for entry in value:
         if not isinstance(entry, dict):
-            raise ValueError("Each prompt block must be an object with 'content'")
+            raise ValueError("每个提示块必须是含 'content' 的对象")
         position = entry.get("position", "output")
         if position not in ("system", "scenario", "output"):
-            raise ValueError(f"Unknown prompt block position '{position}'.")
+            raise ValueError(f"未知的提示块位置 '{position}'。")
         if not isinstance(entry.get("enabled", True), bool):
-            raise ValueError("'enabled' must be a boolean")
+            raise ValueError("'enabled' 必须是布尔值")
         blocks.append(
             PromptBlock(
                 title=clean_optional_text(entry.get("title"), "prompt block title", 80),
@@ -242,17 +242,17 @@ def parse_sampling(value: object) -> SamplingConfig:
     if value is None:
         return SamplingConfig()
     if not isinstance(value, dict):
-        raise ValueError("'sampling' must be an object")
+        raise ValueError("'sampling' 必须是对象")
 
     def bounded_float(field: str, minimum: float, maximum: float) -> float | None:
         raw = value.get(field)
         if raw is None:
             return None
         if isinstance(raw, bool) or not isinstance(raw, (int, float)):
-            raise ValueError(f"'sampling.{field}' must be a number")
+            raise ValueError(f"'sampling.{field}' 必须是数字")
         number = float(raw)
         if number < minimum or number > maximum:
-            raise ValueError(f"'sampling.{field}' must be between {minimum} and {maximum}")
+            raise ValueError(f"'sampling.{field}' 必须在 {minimum} 到 {maximum} 之间")
         return number
 
     return SamplingConfig(
@@ -305,7 +305,7 @@ class LobbyMixin:
         name = clean_text(data.get("name"), "name", 40)
         async with self.lock:
             if self.players:
-                raise ValueError("The room already has players.")
+                raise ValueError("该房间已有玩家。")
             # Synchronous callback: socket promotion and domain authentication share the
             # same critical section. Invalid credentials never replace the old socket.
             if activate is not None:
@@ -341,7 +341,7 @@ class LobbyMixin:
         for c in self.cast:
             if c.name.casefold() == character_name.casefold():
                 return c.name
-        raise ValueError("That character does not exist in this room.")
+        raise ValueError("该角色不存在于此房间。")
 
     async def player_join(
         self: "GameEngine",
@@ -399,13 +399,13 @@ class LobbyMixin:
                 else:
                     holder = self.claims.get(character_name)
                     if holder is not None and holder.casefold() != name.casefold():
-                        raise ValueError("That character has already been claimed.")
+                        raise ValueError("该角色已被认领。")
                     if (
                         mid_game
                         and previous_char != character_name
                         and client_id in self.round_buffer
                     ):
-                        raise ValueError("That seat is mid-round; try again shortly.")
+                        raise ValueError("该席位本轮进行中，请稍后再试。")
                     target.character_name = character_name
                     self.claims[character_name] = name
                     if mid_game and previous_char != character_name:
@@ -419,7 +419,7 @@ class LobbyMixin:
                     GameState.ACTIVE_TURN,
                     GameState.AWAITING_LLM,
                 }:
-                    raise ValueError("The game is not accepting new players.")
+                    raise ValueError("本局已不接受新玩家。")
                 if not observer:
                     character_name = self._canonical_character(character_name)
                 mid_game = self.state in {GameState.ACTIVE_TURN, GameState.AWAITING_LLM}
@@ -432,19 +432,19 @@ class LobbyMixin:
                     None,
                 )
                 if online is not None:
-                    raise ValueError("That player name is already online.")
+                    raise ValueError("该名字已在线。")
                 for old in [
                     p
                     for p in self.players.values()
                     if p.name.casefold() == name.casefold() or p.client_id == client_id
                 ]:
                     if old.client_id in self.round_buffer:
-                        raise ValueError("Your seat is mid-round; try again shortly.")
+                        raise ValueError("你的席位本轮进行中，请稍后再试。")
                     self._evict_player_locked(old.client_id)
                 if not observer:
                     holder = self.claims.get(character_name)
                     if holder is not None and holder.casefold() != name.casefold():
-                        raise ValueError("That character has already been claimed.")
+                        raise ValueError("该角色已被认领。")
                     other_char = next(
                         (
                             p
@@ -454,7 +454,7 @@ class LobbyMixin:
                         None,
                     )
                     if other_char is not None:
-                        raise ValueError("That player name already has a character seat.")
+                        raise ValueError("该名字已拥有角色席位。")
             # Synchronous callback: socket promotion and domain authentication share the
             # same critical section. Invalid credentials never replace the old socket.
             if activate is not None:
@@ -524,11 +524,11 @@ class LobbyMixin:
             player.character_name,
         )
         if rejoined:
-            message = f"{name} rejoined."
+            message = f"{name} 重新加入了。"
         elif player.character_name:
-            message = f"{name} connected as {player.character_name}."
+            message = f"{name} 以 {player.character_name} 的身份加入。"
         else:
-            message = f"{name} joined as a spectator."
+            message = f"{name} 以旁观者身份加入。"
         await self.sender.broadcast_global(ServerEvent(type="system_msg", payload={"msg": message}))
         await self.sender.broadcast_except(client_id, self._player_roster_event())
         if directive is not None:
@@ -551,7 +551,7 @@ class LobbyMixin:
                 return
             player = self.players.get(client_id) or self.pending_players.get(client_id)
             if player is None or not player.is_connected:
-                raise ValueError("Authenticate before chatting.")
+                raise ValueError("请先加入房间再聊天。")
         await self.sender.broadcast_global(
             ServerEvent(type="chat_echo", payload={"name": player.name, "chat": message})
         )
@@ -571,13 +571,13 @@ class LobbyMixin:
                 return
             player = self.players.get(client_id)
             if player is None or not player.is_connected:
-                raise ValueError("Authenticate before updating a character.")
+                raise ValueError("请先加入房间再更新角色。")
             character_name = player.character_name
             if character_name is None:
-                raise ValueError("You are not playing a character.")
+                raise ValueError("你还没有扮演任何角色。")
             holder = self.claims.get(character_name)
             if holder is None or holder.casefold() != player.name.casefold():
-                raise ValueError("You do not own this character's seat.")
+                raise ValueError("这不是你认领的角色。")
             for char in self.cast:
                 if char.name == character_name:
                     char.description = description
@@ -609,29 +609,29 @@ class LobbyMixin:
         time_rules = parse_time_rules(data.get("time_rules"))
         events = parse_events(data.get("events"))
         if events and not time_config.enabled:
-            raise ValueError("Scheduled events require an enabled in-game clock.")
+            raise ValueError("定时事件需要先启用游戏内时钟。")
         lorebook = parse_lorebook(data.get("lorebook"))
         prompt_blocks = parse_prompt_blocks(data.get("prompt_blocks"))
         sampling = parse_sampling(data.get("sampling"))
         random_turn_order = data.get("random_turn_order", True)
         if not isinstance(random_turn_order, bool):
-            raise ValueError("'random_turn_order' must be a boolean")
+            raise ValueError("'random_turn_order' 必须是布尔值")
         host_character = clean_optional_text(data.get("host_character"), "host_character", 40)
         if host_character:
             claimed = next(
                 (c for c in cast if c.name.casefold() == host_character.casefold()), None
             )
             if claimed is None:
-                raise ValueError("The host's character does not exist in the cast.")
+                raise ValueError("房主选择的角色不在角色名单中。")
             host_character = claimed.name
         async with self.lock:
             if not CURRENT_OWNER.get()():
                 return
             player = self.players.get(client_id)
             if player is None or not player.is_host:
-                raise ValueError("Only the host can initialize the scenario.")
+                raise ValueError("只有房主可以初始化剧情。")
             if self.state not in {GameState.SCENARIO_INJECTION, GameState.AWAITING_PLAYERS}:
-                raise ValueError("The scenario cannot be changed in the current state.")
+                raise ValueError("当前状态下无法修改剧情。")
             previous_claims = dict(self.claims)
             self.cast = cast
             self.timed_events = events
@@ -747,9 +747,9 @@ class LobbyMixin:
                 return
             player = self.players.get(client_id)
             if player is None or not player.is_host:
-                raise ValueError("Only the host can start the game.")
+                raise ValueError("只有房主可以开始游戏。")
             if self.state is not GameState.AWAITING_PLAYERS:
-                raise ValueError("The game cannot be started in the current state.")
+                raise ValueError("当前状态下无法开始游戏。")
             cast = list(self.cast)
             claims = dict(self.claims)
             self._launch_job_locked(
@@ -790,7 +790,7 @@ class LobbyMixin:
             )
             await self.sender.broadcast_global(ServerEvent(type="state_update", payload=payload))
             await self.sender.broadcast_global(
-                ServerEvent(type="system_msg", payload={"msg": "The game has started."})
+                ServerEvent(type="system_msg", payload={"msg": "游戏已开始。"})
             )
             await self.sender.broadcast_global(
                 ServerEvent(type="round_start", payload={"round_number": 1})
@@ -807,9 +807,9 @@ class LobbyMixin:
                 return
             player = self.players.get(client_id)
             if player is None or not player.is_host:
-                raise ValueError("Only the host can end the game.")
+                raise ValueError("只有房主可以结束游戏。")
             if self.state not in {GameState.ACTIVE_TURN, GameState.AWAITING_LLM}:
-                raise ValueError("The game cannot be ended in the current state.")
+                raise ValueError("当前状态下无法结束游戏。")
         await self.shutdown()
 
     async def _close_room(self: "GameEngine", client_id: str, data: dict[str, object]) -> None:
@@ -820,8 +820,8 @@ class LobbyMixin:
                 return
             player = self.players.get(client_id) or self.pending_players.get(client_id)
             if player is None or not player.is_host:
-                raise ValueError("Only the host can close the room.")
-        await self.shutdown(reason="The host closed the room.")
+                raise ValueError("只有房主可以关闭房间。")
+        await self.shutdown(reason="房主关闭了房间。")
 
     def _characters_payload(self: "GameEngine") -> list[dict[str, object]]:
         """Build the public cast payload with claim status."""

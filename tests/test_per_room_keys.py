@@ -155,7 +155,7 @@ def test_undecryptable_key_blocks_the_room_until_the_host_replaces_it(offline_pr
     restored_registry.restore_rooms()
     restored = restored_registry.rooms[room.code]
     assert restored.engine.resolver.key_required is True
-    with pytest.raises(ValueError, match="host"):
+    with pytest.raises(ValueError, match="房主"):
         asyncio.run(restored_registry.provide_room_key(restored, "intruder", {"api_key": "sk-x"}))
     asyncio.run(restored_registry.provide_room_key(restored, "host", {"api_key": "sk-new"}))
     assert restored.engine.resolver.key_required is False

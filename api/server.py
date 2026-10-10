@@ -135,7 +135,7 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
         registry = request.app.state.registry
         room = registry.rooms.get(code)
         if room is not None:
-            await registry.shutdown_room(room, "The room was closed by the server operator.")
+            await registry.shutdown_room(room, "房间已被服务器管理员关闭。")
         return RedirectResponse("/admin/rooms", status_code=303)
 
     @application.get("/admin/rooms/{code}/record")
@@ -196,7 +196,7 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
                         authenticated = False
                     if not authenticated:
                         if payload.event_type not in _ROOM_EVENTS:
-                            raise ValueError("Create or join a room before sending game messages.")
+                            raise ValueError("请先创建或加入房间再发送游戏消息。")
                         if payload.event_type == "room_info":
                             info_room = registry.find_room(payload.data.get("invite_code"))
                             await active_manager.send_socket(
@@ -224,7 +224,7 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
                                 else:
                                     active_manager = room.connections
                                     await registry.remove_room(
-                                        room.code, "The room could not be created.", notify=False
+                                        room.code, "无法创建房间。", notify=False
                                     )
                                 raise
                             active_manager = room.connections
@@ -247,7 +247,7 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
                     elif not room.connections.owns(client_id, websocket):
                         break
                     elif payload.event_type in _ROOM_EVENTS:
-                        raise ValueError("This socket is already in a room.")
+                        raise ValueError("该连接已在房间中。")
                     elif payload.event_type == "provide_key":
                         registry.touch(room)
                         await registry.provide_room_key(room, client_id, payload.data)
@@ -266,9 +266,7 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
                             authorize=lambda: room.connections.owns(client_id, websocket),
                         )
                 except (ValidationError, ValueError) as exc:
-                    message = (
-                        "Invalid message schema." if isinstance(exc, ValidationError) else str(exc)
-                    )
+                    message = "无效的消息格式。" if isinstance(exc, ValidationError) else str(exc)
                     event_name = payload.event_type if payload is not None else "-"
                     LOGGER.info(
                         "Client message rejected client=%s event=%s reason=%s",

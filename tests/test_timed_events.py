@@ -99,7 +99,7 @@ def test_events_without_clock_are_rejected(tmp_path):
             ),
         )
         error = sender.events_of_type("error")[-1].payload["msg"]
-        assert "require an enabled" in error
+        assert "定时事件需要先启用游戏内时钟" in error
         assert engine.state is GameState.SCENARIO_INJECTION
         await engine.shutdown()
 
