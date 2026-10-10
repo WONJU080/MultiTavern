@@ -12,7 +12,7 @@ from urllib.parse import parse_qs
 from uuid import UUID
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
@@ -21,7 +21,9 @@ from api.connections import ConnectionManager
 from core.config import settings
 from core.schemas import ClientPayload, ServerEvent
 from logic.llm_manager import LLMContextManager
+from logic.lobby import parse_cast, parse_lorebook, parse_prompt_blocks, parse_sampling
 from logic.rooms import Room, RoomRegistry, format_invite_code
+from logic.st_import import convert_bytes
 
 LOGGER = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -156,6 +158,42 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
                 status_code=404,
             )
         return FileResponse(path, media_type="text/html")
+
+    @application.post("/st/import")
+    async def st_import(request: Request) -> JSONResponse:
+        """Map an uploaded SillyTavern artifact into an importable config.
+
+        The endpoint performs a pure, deterministic field mapping. It never
+        touches room state and is available during scenario setup like room
+        creation itself.
+        """
+        data = await request.body()
+        if not data or len(data) > 32 * 1024 * 1024:
+            return JSONResponse({"error": "文件为空或过大。"}, status_code=400)
+        try:
+            config, warnings = convert_bytes(data)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        try:
+            if "characters" in config:
+                config["characters"] = [
+                    member.model_dump() for member in parse_cast(config["characters"])
+                ]
+            if "lorebook" in config:
+                config["lorebook"] = [
+                    entry.model_dump() for entry in parse_lorebook(config["lorebook"])
+                ]
+            if "prompt_blocks" in config:
+                config["prompt_blocks"] = [
+                    block.model_dump() for block in parse_prompt_blocks(config["prompt_blocks"])
+                ]
+            if "sampling" in config:
+                config["sampling"] = parse_sampling(config["sampling"]).model_dump(
+                    exclude_none=True
+                )
+        except ValueError as exc:
+            return JSONResponse({"error": f"生成的配置未通过校验：{exc}"}, status_code=400)
+        return JSONResponse({"config": config, "warnings": warnings})
 
     @application.websocket("/ws/{client_id}")
     async def websocket_endpoint(websocket: WebSocket, client_id: str) -> None:

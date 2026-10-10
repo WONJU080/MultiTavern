@@ -124,7 +124,13 @@ class TimedEvent(StrictModel):
 
 
 class LorebookEntry(StrictModel):
-    """A world-info entry activated by keyword matches in recent play."""
+    """A world-info entry activated by keyword matches in recent play.
+
+    ``depth`` is optional: ``None`` folds the matched entry into the aggregated
+    world-lore text block, while an integer injects it as a standalone message
+    at that many messages before the current request (with ``role``), matching
+    SillyTavern's in-chat world-info injection.
+    """
 
     title: str = ""
     keys: list[str]
@@ -132,6 +138,8 @@ class LorebookEntry(StrictModel):
     order: int = Field(default=0, ge=0, le=10_000)
     enabled: bool = True
     constant: bool = False
+    role: Literal["system", "assistant", "user"] = "system"
+    depth: int | None = Field(default=None, ge=0, le=100)
 
 
 class PromptBlock(StrictModel):
@@ -151,10 +159,20 @@ class PromptBlock(StrictModel):
 
 
 class SamplingConfig(StrictModel):
-    """Per-room generation sampling overrides for supported provider fields."""
+    """Per-room generation sampling overrides for supported provider fields.
+
+    ``top_k``, ``min_p`` and ``repetition_penalty`` are forwarded through the
+    provider ``extra_body`` because the OpenAI SDK types do not model them;
+    backends that reject them will surface a clear error for that room.
+    """
 
     temperature: float | None = Field(default=None, ge=0, le=2)
     top_p: float | None = Field(default=None, ge=0, le=1)
+    frequency_penalty: float | None = Field(default=None, ge=-2, le=2)
+    presence_penalty: float | None = Field(default=None, ge=-2, le=2)
+    top_k: int | None = Field(default=None, ge=0, le=1_000_000)
+    min_p: float | None = Field(default=None, ge=0, le=1)
+    repetition_penalty: float | None = Field(default=None, ge=0, le=5)
 
 
 class ScenarioTitle(StrictModel):

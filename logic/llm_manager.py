@@ -16,6 +16,7 @@ from openai import (
     APIConnectionError,
     APITimeoutError,
     AsyncOpenAI,
+    BadRequestError,
     DefaultAsyncHttpxClient,
     OpenAIError,
 )
@@ -167,6 +168,8 @@ class LLMContextManager:
         self.lorebook: list[Any] = []
         self.prompt_blocks: list[Any] = []
         self.sampling_options: dict[str, float] = {}
+        self.sampling_extra: dict[str, float | int] = {}
+        self._extra_samplers_rejected = False
         self.cast_state: dict[str, str] | None = None
         self._known_player_names: list[str] = []
         self.last_token_usage = self.system_prompt_tokens + 3
@@ -291,15 +294,28 @@ class LLMContextManager:
         self.prompt_blocks = list(blocks)
 
     def set_sampling(self, config: Any) -> None:
-        """Replace the per-room sampling overrides with supported fields only."""
+        """Replace the per-room sampling overrides with supported fields only.
+
+        ``temperature``/``top_p``/``frequency_penalty``/``presence_penalty`` are
+        passed as typed request arguments; ``top_k``/``min_p``/
+        ``repetition_penalty`` travel through ``extra_body`` because the OpenAI
+        SDK does not type them.
+        """
         options: dict[str, float] = {}
-        temperature = getattr(config, "temperature", None)
-        top_p = getattr(config, "top_p", None)
-        if isinstance(temperature, (int, float)) and not isinstance(temperature, bool):
-            options["temperature"] = float(temperature)
-        if isinstance(top_p, (int, float)) and not isinstance(top_p, bool):
-            options["top_p"] = float(top_p)
+        extra: dict[str, float | int] = {}
+        for name in ("temperature", "top_p", "frequency_penalty", "presence_penalty"):
+            value = getattr(config, name, None)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                options[name] = float(value)
+        top_k = getattr(config, "top_k", None)
+        if isinstance(top_k, int) and not isinstance(top_k, bool):
+            extra["top_k"] = top_k
+        for name in ("min_p", "repetition_penalty"):
+            value = getattr(config, name, None)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                extra[name] = float(value)
         self.sampling_options = options
+        self.sampling_extra = {} if self._extra_samplers_rejected else extra
 
     def _enabled_blocks(self, position: str) -> list[Any]:
         """Return enabled instruction blocks for a prompt position, in order."""
@@ -307,26 +323,30 @@ class LLMContextManager:
             block for block in self.prompt_blocks if block.enabled and block.position == position
         ]
 
-    def _history_with_blocks(self, kind: str) -> list[dict[str, str]]:
-        """Interleave depth-injected blocks into the retained conversation.
+    def _history_with_blocks(self, kind: str, lore_entries: list[Any] = ()) -> list[dict[str, str]]:
+        """Interleave depth-injected blocks and world-info into the conversation.
 
         Depth counts backward from the end of the retained history: depth 0
         lands immediately before the current request, depth 1 before the last
         retained message, and so on. Depths beyond the retained length clamp to
-        the start of history, and blocks sharing a depth keep their configured
-        order. Each block is emitted with its own role, so a host can place a
+        the start of history, and entries sharing a depth keep their configured
+        order. Each entry is emitted with its own role, so a host can place a
         pseudo assistant turn or a system reminder right beside the live turn.
         """
         if kind not in {"round", "dice", "initial"}:
             return list(self.history)
         blocks = self._enabled_blocks("history")
-        if not blocks:
+        if not blocks and not lore_entries:
             return list(self.history)
         length = len(self.history)
         insertions: dict[int, list[dict[str, str]]] = {}
         for block in blocks:
             index = max(0, length - min(block.depth, length))
             insertions.setdefault(index, []).append({"role": block.role, "content": block.content})
+        for entry in lore_entries:
+            depth = entry.depth if entry.depth is not None else 0
+            index = max(0, length - min(depth, length))
+            insertions.setdefault(index, []).append({"role": entry.role, "content": entry.content})
         messages: list[dict[str, str]] = []
         for index, message in enumerate(self.history):
             messages.extend(insertions.get(index, []))
@@ -334,8 +354,8 @@ class LLMContextManager:
         messages.extend(insertions.get(length, []))
         return messages
 
-    def _lorebook_block(self, scan_text: str) -> str:
-        """Return budgeted world-book content triggered by recent context.
+    def _matched_lorebook(self, scan_text: str) -> list[Any]:
+        """Return budgeted world-book entries triggered by recent context.
 
         Entry keys are matched case-insensitively against the tail of the
         conversation and the current request (never against the fixed genesis,
@@ -378,17 +398,19 @@ class LLMContextManager:
                 break
             chosen.append(entry)
             used += cost
-        if not chosen:
-            return ""
-        blocks = "\n\n".join(
-            f"[{entry.title}]\n{entry.content}" if entry.title else entry.content
-            for entry in chosen
-        )
         logger.info(
-            "Lorebook inserted entries=%d tokens=%d scanned=%d",
+            "Lorebook matched entries=%d tokens=%d scanned=%d",
             len(chosen),
             used,
             len(self.history[-depth:]),
+        )
+        return chosen
+
+    def _render_lorebook(self, entries: list[Any]) -> str:
+        """Render matched entries that belong in the aggregated world-lore block."""
+        blocks = "\n\n".join(
+            f"[{entry.title}]\n{entry.content}" if entry.title else entry.content
+            for entry in entries
         )
         return (
             "\n\nWorld lore (apply these facts to the scene silently; never present them "
@@ -820,10 +842,16 @@ class LLMContextManager:
                 ),
             }
         request_prompt = prompt
+        depth_lore: list[Any] = []
         if kind in {"round", "dice", "initial"} and self.lorebook:
-            block = self._lorebook_block(prompt["content"])
-            if block:
-                request_prompt = {**prompt, "content": prompt["content"] + block}
+            chosen = self._matched_lorebook(prompt["content"])
+            depth_lore = [entry for entry in chosen if entry.depth is not None]
+            text_entries = [entry for entry in chosen if entry.depth is None]
+            if text_entries:
+                request_prompt = {
+                    **prompt,
+                    "content": prompt["content"] + self._render_lorebook(text_entries),
+                }
         output_blocks = self._enabled_blocks("output") if kind in {"round", "initial"} else []
         if output_blocks:
             request_prompt = {
@@ -837,7 +865,7 @@ class LLMContextManager:
             await self._compact_if_needed(request_prompt, schema, kind)
         messages = [
             *self._fixed_messages(kind),
-            *(self._history_with_blocks(kind) if include_history else []),
+            *(self._history_with_blocks(kind, depth_lore) if include_history else []),
             request_prompt,
         ]
         for repair in range(self.llm.max_retries + 1):
@@ -1117,52 +1145,71 @@ class LLMContextManager:
         response = None
         error = None
         cap_key = "max_tokens" if self.llm.provider == "compatible" else "max_completion_tokens"
+        output_limit = self._output_limit(kind)
+        template_options = self._template_options()
+
+        async def _send(extra_body: dict[str, Any]) -> Any:
+            if self.llm.structured_outputs:
+                return await self.client.beta.chat.completions.parse(
+                    model=self.llm.model_name,
+                    messages=messages,
+                    response_format=schema,
+                    **({"extra_body": extra_body} if extra_body else {}),
+                    **{cap_key: output_limit},
+                    **self.sampling_options,
+                )
+            last = dict(messages[-1])
+            last["content"] = (
+                f"{last['content']}\n\nReturn json output matching this schema exactly, "
+                f"with no extra text or markdown:\n{self._schema_text(schema)}"
+            )
+            return await self.client.chat.completions.create(
+                model=self.llm.model_name,
+                messages=[*messages[:-1], last],
+                response_format={"type": "json_object"},
+                **{cap_key: output_limit},
+                **({"extra_body": extra_body} if extra_body else {}),
+                **self.sampling_options,
+            )
+
         try:
-            async with asyncio.timeout(self.llm.request_timeout_seconds):
-                if self.llm.structured_outputs:
-                    response = await self.client.beta.chat.completions.parse(
-                        model=self.llm.model_name,
-                        messages=messages,
-                        response_format=schema,
-                        **(
-                            {"extra_body": self._template_options()}
-                            if self._template_options()
-                            else {}
-                        ),
-                        **{cap_key: self._output_limit(kind)},
-                        **self.sampling_options,
-                    )
-                    choice = response.choices[0]
-                    if getattr(choice, "finish_reason", None) == "length":
-                        raise LLMOutputTruncatedError("AI 输出触达字数上限，本轮结果未提交。")
-                    parsed = choice.message.parsed
-                    if parsed is None:
-                        raise LLMResolutionError("AI 没有返回通过校验的结果。")
-                    result = schema.model_validate(
-                        parsed.model_dump() if isinstance(parsed, BaseModel) else parsed
-                    )
-                    self._last_response_text = getattr(choice.message, "content", None)
-                else:
-                    last = dict(messages[-1])
-                    last["content"] = (
-                        f"{last['content']}\n\nReturn json output matching this schema exactly, "
-                        f"with no extra text or markdown:\n{self._schema_text(schema)}"
-                    )
-                    response = await self.client.chat.completions.create(
-                        model=self.llm.model_name,
-                        messages=[*messages[:-1], last],
-                        response_format={"type": "json_object"},
-                        **{cap_key: self._output_limit(kind)},
-                        **self.sampling_options,
-                    )
-                    choice = response.choices[0]
-                    if getattr(choice, "finish_reason", None) == "length":
-                        raise LLMOutputTruncatedError("AI 输出触达字数上限，本轮结果未提交。")
-                    content = getattr(choice.message, "content", None)
-                    if not isinstance(content, str) or not content.strip():
-                        raise LLMResolutionError("AI 没有返回通过校验的结果。")
-                    self._last_response_text = content
-                    result = schema.model_validate_json(content)
+            # Some backends reject the non-standard samplers (top_k/min_p/
+            # repetition_penalty). Retry once without them and stop using them
+            # for this room so a preset import can never break generation.
+            candidates = [{**template_options, **self.sampling_extra}]
+            if self.sampling_extra:
+                candidates.append(dict(template_options))
+            for candidate_index, extra_body in enumerate(candidates):
+                try:
+                    async with asyncio.timeout(self.llm.request_timeout_seconds):
+                        response = await _send(extra_body)
+                    break
+                except BadRequestError:
+                    if candidate_index == 0 and self.sampling_extra:
+                        logger.warning(
+                            "Extra sampling fields rejected by provider; retrying without them."
+                        )
+                        self.sampling_extra = {}
+                        self._extra_samplers_rejected = True
+                        continue
+                    raise
+            choice = response.choices[0]
+            if getattr(choice, "finish_reason", None) == "length":
+                raise LLMOutputTruncatedError("AI 输出触达字数上限，本轮结果未提交。")
+            if self.llm.structured_outputs:
+                parsed = choice.message.parsed
+                if parsed is None:
+                    raise LLMResolutionError("AI 没有返回通过校验的结果。")
+                result = schema.model_validate(
+                    parsed.model_dump() if isinstance(parsed, BaseModel) else parsed
+                )
+                self._last_response_text = getattr(choice.message, "content", None)
+            else:
+                content = getattr(choice.message, "content", None)
+                if not isinstance(content, str) or not content.strip():
+                    raise LLMResolutionError("AI 没有返回通过校验的结果。")
+                self._last_response_text = content
+                result = schema.model_validate_json(content)
         except asyncio.CancelledError:
             error = "CancelledError"
             raise

@@ -150,8 +150,16 @@ const elements = {
     loadConfigButton: document.getElementById("load-config-button"),
     exportConfigButton: document.getElementById("export-config-button"),
     loadConfigInput: document.getElementById("load-config-input"),
+    importStButton: document.getElementById("import-st-button"),
+    importStInput: document.getElementById("import-st-input"),
+    importWarnings: document.getElementById("import-warnings"),
     samplingTemperature: document.getElementById("sampling-temperature"),
     samplingTopP: document.getElementById("sampling-top-p"),
+    samplingFrequencyPenalty: document.getElementById("sampling-frequency-penalty"),
+    samplingPresencePenalty: document.getElementById("sampling-presence-penalty"),
+    samplingTopK: document.getElementById("sampling-top-k"),
+    samplingMinP: document.getElementById("sampling-min-p"),
+    samplingRepetitionPenalty: document.getElementById("sampling-repetition-penalty"),
     promptBlocksEditor: document.getElementById("prompt-blocks-editor"),
     addPromptBlock: document.getElementById("add-prompt-block"),
     randomTurnOrder: document.getElementById("random-turn-order"),
@@ -1391,13 +1399,23 @@ function collectPromptBlocks() {
 
 function collectSampling() {
     const sampling = {};
-    const temperature = Number.parseFloat(elements.samplingTemperature.value);
-    const topP = Number.parseFloat(elements.samplingTopP.value);
-    if (Number.isFinite(temperature)) {
-        sampling.temperature = temperature;
+    const floats = [
+        ["temperature", elements.samplingTemperature],
+        ["top_p", elements.samplingTopP],
+        ["frequency_penalty", elements.samplingFrequencyPenalty],
+        ["presence_penalty", elements.samplingPresencePenalty],
+        ["min_p", elements.samplingMinP],
+        ["repetition_penalty", elements.samplingRepetitionPenalty],
+    ];
+    for (const [name, input] of floats) {
+        const value = Number.parseFloat(input.value);
+        if (Number.isFinite(value)) {
+            sampling[name] = value;
+        }
     }
-    if (Number.isFinite(topP)) {
-        sampling.top_p = topP;
+    const topK = Number.parseInt(elements.samplingTopK.value, 10);
+    if (Number.isFinite(topK)) {
+        sampling.top_k = topK;
     }
     return sampling;
 }
@@ -1504,6 +1522,24 @@ function makeLorebookRow(entry = {}) {
     order.className = "lorebook-order";
     order.title = "插入顺序（越高影响越强）";
     order.value = entry.order ?? 0;
+    const role = document.createElement("select");
+    role.className = "lorebook-role";
+    ["system", "assistant", "user"].forEach((value) => {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value;
+        role.appendChild(option);
+    });
+    role.value = ["system", "assistant", "user"].includes(entry.role) ? entry.role : "system";
+    role.title = "in-chat 注入角色（仅当填写深度时生效）";
+    const depth = document.createElement("input");
+    depth.type = "number";
+    depth.min = 0;
+    depth.max = 100;
+    depth.className = "lorebook-depth";
+    depth.placeholder = "深度";
+    depth.title = "留空=并入世界书文本；填 0-100=按 depth 作为消息注入";
+    depth.value = entry.depth === null || entry.depth === undefined ? "" : entry.depth;
     const constantLabel = document.createElement("label");
     constantLabel.className = "check-label lorebook-constant";
     const constantCheck = document.createElement("input");
@@ -1516,7 +1552,7 @@ function makeLorebookRow(entry = {}) {
     remove.className = "remove-row";
     remove.textContent = "×";
     remove.addEventListener("click", () => row.remove());
-    row.append(title, keys, content, order, constantLabel, remove);
+    row.append(title, keys, content, order, role, depth, constantLabel, remove);
     elements.lorebookEditor.appendChild(row);
     return row;
 }
@@ -1574,17 +1610,23 @@ function collectEvents() {
 
 function collectLorebook() {
     return [...elements.lorebookEditor.querySelectorAll(".lorebook-row")]
-        .map((row) => ({
-            title: row.querySelector(".lorebook-title").value.trim(),
-            keys: row
-                .querySelector(".lorebook-keys")
-                .value.split(",")
-                .map((key) => key.trim())
-                .filter(Boolean),
-            content: row.querySelector(".lorebook-content").value.trim(),
-            order: parseInt(row.querySelector(".lorebook-order").value, 10) || 0,
-            constant: row.querySelector(".lorebook-constant input").checked,
-        }))
+        .map((row) => {
+            const rawDepth = row.querySelector(".lorebook-depth").value.trim();
+            const depth = rawDepth === "" ? null : Number.parseInt(rawDepth, 10);
+            return {
+                title: row.querySelector(".lorebook-title").value.trim(),
+                keys: row
+                    .querySelector(".lorebook-keys")
+                    .value.split(",")
+                    .map((key) => key.trim())
+                    .filter(Boolean),
+                content: row.querySelector(".lorebook-content").value.trim(),
+                order: parseInt(row.querySelector(".lorebook-order").value, 10) || 0,
+                role: row.querySelector(".lorebook-role").value,
+                depth: Number.isFinite(depth) ? depth : null,
+                constant: row.querySelector(".lorebook-constant input").checked,
+            };
+        })
         .filter((entry) => entry.content && entry.keys.length);
 }
 
@@ -1693,6 +1735,21 @@ function applyScenarioConfig(config) {
         if (Number.isFinite(config.sampling.top_p)) {
             elements.samplingTopP.value = config.sampling.top_p;
         }
+        if (Number.isFinite(config.sampling.frequency_penalty)) {
+            elements.samplingFrequencyPenalty.value = config.sampling.frequency_penalty;
+        }
+        if (Number.isFinite(config.sampling.presence_penalty)) {
+            elements.samplingPresencePenalty.value = config.sampling.presence_penalty;
+        }
+        if (Number.isFinite(config.sampling.top_k)) {
+            elements.samplingTopK.value = config.sampling.top_k;
+        }
+        if (Number.isFinite(config.sampling.min_p)) {
+            elements.samplingMinP.value = config.sampling.min_p;
+        }
+        if (Number.isFinite(config.sampling.repetition_penalty)) {
+            elements.samplingRepetitionPenalty.value = config.sampling.repetition_penalty;
+        }
     }
     if (typeof config.random_turn_order === "boolean") {
         elements.randomTurnOrder.checked = config.random_turn_order;
@@ -1753,6 +1810,40 @@ elements.loadConfigInput.addEventListener("change", () => {
 elements.exportConfigButton.addEventListener("click", () => {
     exportScenarioConfig();
     elements.hostStatus.textContent = "配置已导出。";
+});
+
+elements.importStButton.addEventListener("click", () => {
+    elements.importStInput.click();
+});
+
+elements.importStInput.addEventListener("change", async () => {
+    const file = elements.importStInput.files && elements.importStInput.files[0];
+    if (!file) {
+        return;
+    }
+    elements.hostStatus.textContent = "正在导入 ST 文件…";
+    try {
+        const response = await fetch("/st/import", { method: "POST", body: file });
+        const payload = await response.json();
+        if (!response.ok) {
+            throw new Error(payload.error || `HTTP ${response.status}`);
+        }
+        applyScenarioConfig(payload.config || {});
+        const warnings = payload.warnings || [];
+        if (warnings.length) {
+            elements.importWarnings.hidden = false;
+            elements.importWarnings.textContent =
+                "导入完成；以下内容未映射：" + warnings.join(" ");
+        } else {
+            elements.importWarnings.hidden = true;
+            elements.importWarnings.textContent = "";
+        }
+        elements.hostStatus.textContent = "ST 配置已导入。";
+    } catch (error) {
+        elements.hostStatus.textContent = `导入失败：${error.message}`;
+    } finally {
+        elements.importStInput.value = "";
+    }
 });
 
 elements.timeEnabled.addEventListener("change", () => {

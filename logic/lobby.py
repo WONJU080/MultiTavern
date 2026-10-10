@@ -193,6 +193,9 @@ def parse_lorebook(value: object) -> list[LorebookEntry]:
         if len({key.casefold() for key in cleaned_keys}) != len(cleaned_keys):
             raise ValueError("同一条目内的关键词不能重复。")
         title = clean_optional_text(entry.get("title"), "world-book title", 80)
+        role = entry.get("role", "system")
+        if role not in ("system", "assistant", "user"):
+            raise ValueError(f"未知的世界书角色 '{role}'。")
         for flag in ("enabled", "constant"):
             if not isinstance(entry.get(flag, True), bool):
                 raise ValueError(f"'{flag}' 必须是布尔值")
@@ -204,6 +207,8 @@ def parse_lorebook(value: object) -> list[LorebookEntry]:
                 order=_bounded_int(entry.get("order"), "world-book order", 0, 10_000),
                 enabled=bool(entry.get("enabled", True)),
                 constant=bool(entry.get("constant", False)),
+                role=role,
+                depth=_bounded_int(entry.get("depth"), "world-book depth", None, 100),
             )
         )
     return entries
@@ -263,6 +268,11 @@ def parse_sampling(value: object) -> SamplingConfig:
     return SamplingConfig(
         temperature=bounded_float("temperature", 0, 2),
         top_p=bounded_float("top_p", 0, 1),
+        frequency_penalty=bounded_float("frequency_penalty", -2, 2),
+        presence_penalty=bounded_float("presence_penalty", -2, 2),
+        top_k=_bounded_int(value.get("top_k"), "sampling.top_k", None, 1_000_000),
+        min_p=bounded_float("min_p", 0, 1),
+        repetition_penalty=bounded_float("repetition_penalty", 0, 5),
     )
 
 

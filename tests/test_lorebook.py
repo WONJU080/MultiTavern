@@ -187,6 +187,53 @@ def test_scan_depth_limits_history_matching():
     asyncio.run(run())
 
 
+def test_parse_lorebook_accepts_role_and_depth():
+    """World-book entries carry an optional role and in-chat depth."""
+    entries = parse_lorebook([{"keys": ["a"], "content": "x", "role": "assistant", "depth": 3}])
+    assert entries[0].role == "assistant" and entries[0].depth == 3
+    default = parse_lorebook([{"keys": ["a"], "content": "x"}])[0]
+    assert default.role == "system" and default.depth is None
+    with pytest.raises(ValueError):
+        parse_lorebook([{"keys": ["a"], "content": "x", "role": "nobody"}])
+    with pytest.raises(ValueError):
+        parse_lorebook([{"keys": ["a"], "content": "x", "depth": 101}])
+
+
+def test_depth_entries_inject_as_messages_not_world_lore():
+    """Entries with a depth become role messages; others stay in the text block."""
+    settings.llm.provider = "openai"
+    settings.llm.structured_outputs = True
+    client = FakeClient()
+
+    async def run():
+        manager = setup_manager(
+            client,
+            [
+                LorebookEntry(keys=["铁匠"], content="铁匠铺在村北。"),
+                LorebookEntry(keys=["铁匠"], content="[贴近] 铁匠认得你。", role="system", depth=0),
+                LorebookEntry(
+                    keys=["铁匠"], content="[假助手] 我会照做。", role="assistant", depth=1
+                ),
+            ],
+        )
+        manager.history = [
+            {"role": "user", "content": "铁匠"},
+            {"role": "assistant", "content": "嗯。"},
+        ]
+        await manager.generate_resolution({"Alice": "去铁匠铺"})
+        messages = client.calls[-1]["messages"]
+        contents = [message["content"] for message in messages]
+        roles = [message["role"] for message in messages]
+        assert any("World lore" in c and "铁匠铺在村北" in c for c in contents)
+        assert not any("World lore" in c and "[贴近]" in c for c in contents)
+        near = contents.index("[贴近] 铁匠认得你。")
+        assert near == len(messages) - 2 and roles[near] == "system"
+        deeper = contents.index("[假助手] 我会照做。")
+        assert roles[deeper] == "assistant" and deeper < near
+
+    asyncio.run(run())
+
+
 def test_lorebook_flows_through_engine_and_persistence(tmp_path):
     """scenario_init stores the lorebook on engine, resolver, and saves."""
 

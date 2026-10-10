@@ -190,6 +190,77 @@ def test_unset_sampling_omits_parameters():
     asyncio.run(run())
 
 
+def test_parse_sampling_extra_fields_and_forwarding():
+    """Extra samplers parse, range-check, and travel through extra_body."""
+    sampling = parse_sampling(
+        {
+            "frequency_penalty": 0.5,
+            "presence_penalty": -0.5,
+            "top_k": 40,
+            "min_p": 0.05,
+            "repetition_penalty": 1.1,
+        }
+    )
+    assert sampling.frequency_penalty == 0.5 and sampling.presence_penalty == -0.5
+    assert sampling.top_k == 40 and sampling.min_p == 0.05
+    assert sampling.repetition_penalty == 1.1
+    with pytest.raises(ValueError):
+        parse_sampling({"top_k": -1})
+    with pytest.raises(ValueError):
+        parse_sampling({"min_p": 2})
+
+    settings.llm.provider = "openai"
+    settings.llm.structured_outputs = True
+    client = FakeClient()
+
+    async def run():
+        manager = build_manager(client)
+        manager.set_sampling(sampling)
+        await manager.generate_resolution({"Alice": "Wait"})
+        kwargs = client.calls[-1]
+        assert kwargs["frequency_penalty"] == 0.5
+        assert kwargs["presence_penalty"] == -0.5
+        assert kwargs["extra_body"]["top_k"] == 40
+        assert kwargs["extra_body"]["min_p"] == 0.05
+        assert kwargs["extra_body"]["repetition_penalty"] == 1.1
+
+    asyncio.run(run())
+
+
+def test_extra_samplers_fall_back_on_bad_request():
+    """A backend that rejects extra samplers is retried without them once."""
+    import httpx
+    from openai import BadRequestError
+
+    settings.llm.provider = "openai"
+    settings.llm.structured_outputs = True
+
+    class RejectingClient(FakeClient):
+        async def parse(self, **kwargs):
+            if kwargs.get("extra_body", {}).get("top_k") is not None:
+                request = httpx.Request("POST", "http://test/v1/chat/completions")
+                raise BadRequestError(
+                    "rejected", response=httpx.Response(400, request=request), body=None
+                )
+            return await super().parse(**kwargs)
+
+    client = RejectingClient()
+
+    async def run():
+        manager = build_manager(client)
+        manager.set_sampling(SamplingConfig(temperature=0.9, top_k=200))
+        await manager.generate_resolution({"Alice": "Wait"})
+        assert manager.sampling_extra == {}
+        assert manager._extra_samplers_rejected is True
+        assert len(client.calls) == 1
+        assert "extra_body" not in client.calls[-1]
+        # A later set_sampling must not resurrect the rejected fields.
+        manager.set_sampling(SamplingConfig(top_k=300))
+        assert manager.sampling_extra == {}
+
+    asyncio.run(run())
+
+
 def test_output_echoing_a_block_is_rejected():
     """Quoting an instruction block in public output fails the round."""
     settings.llm.provider = "openai"

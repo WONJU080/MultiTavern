@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Anyworld</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=21">
+  <link rel="stylesheet" href="/static/css/style.css?v=22">
   <link rel="icon" type="image/png" href="/static/favicon/favicon-96x96.png" sizes="96x96" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon/favicon.svg" />
   <link rel="shortcut icon" href="/static/favicon/favicon.ico" />
@@ -110,8 +110,11 @@
           <div class="config-toolbar">
             <button type="button" id="load-config-button">导入配置</button>
             <button type="button" id="export-config-button">导出配置</button>
+            <button type="button" id="import-st-button">导入 ST（角色卡/预设）</button>
             <input type="file" id="load-config-input" accept=".json,application/json" hidden>
+            <input type="file" id="import-st-input" accept=".json,.png,application/json,image/png" hidden>
           </div>
+          <p class="config-hint" id="import-warnings" hidden></p>
           <label id="cast-label">角色名单——创建角色池；可选勾选你要扮演的角色（留空则旁观）：</label>
           <div id="character-editor"></div>
           <button type="button" id="add-character">+ 添加角色</button>
@@ -162,6 +165,20 @@
               <input id="sampling-temperature" type="number" min="0" max="2" step="0.01">
               <label for="sampling-top-p">top_p（0–1，留空=默认）</label>
               <input id="sampling-top-p" type="number" min="0" max="1" step="0.01">
+            </div>
+            <div class="field-row">
+              <label for="sampling-frequency-penalty">frequency_penalty（-2–2）</label>
+              <input id="sampling-frequency-penalty" type="number" min="-2" max="2" step="0.01">
+              <label for="sampling-presence-penalty">presence_penalty（-2–2）</label>
+              <input id="sampling-presence-penalty" type="number" min="-2" max="2" step="0.01">
+            </div>
+            <div class="field-row">
+              <label for="sampling-top-k">top_k（0+，留空=默认）</label>
+              <input id="sampling-top-k" type="number" min="0" max="1000000" step="1">
+              <label for="sampling-min-p">min_p（0–1）</label>
+              <input id="sampling-min-p" type="number" min="0" max="1" step="0.01">
+              <label for="sampling-repetition-penalty">repetition_penalty（0–5）</label>
+              <input id="sampling-repetition-penalty" type="number" min="0" max="5" step="0.01">
             </div>
             <p class="config-hint">位置说明：system＝核心系统提示之后 · scenario＝剧情/指引之后 · output＝生成之前 · history＝插入最近对话（role/depth 生效，depth 0 紧贴当前回合）。</p>
             <div id="prompt-blocks-editor"></div>
@@ -229,7 +246,7 @@
   <button id="character-card-button" type="button" hidden>我的角色卡</button>
   <button id="mobile-menu-button" type="button" hidden aria-label="Menu">⋯</button>
   <div id="connection-status" role="status">连接中…</div>
-  <script src="/static/js/app.js?v=rooms-22"></script>
+  <script src="/static/js/app.js?v=st-import-23"></script>
 </body>
 
 </html>
