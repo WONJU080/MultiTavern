@@ -128,6 +128,7 @@ const elements = {
     scenarioStep: document.getElementById("scenario-step"),
     scenarioForm: document.getElementById("scenario-form"),
     scenario: document.getElementById("scenario-input"),
+    opening: document.getElementById("opening-input"),
     guidance: document.getElementById("guidance-input"),
     scenarioSubmit: document.getElementById("scenario-submit"),
     lobbyStep: document.getElementById("lobby-step"),
@@ -162,7 +163,20 @@ const elements = {
     samplingRepetitionPenalty: document.getElementById("sampling-repetition-penalty"),
     promptBlocksEditor: document.getElementById("prompt-blocks-editor"),
     addPromptBlock: document.getElementById("add-prompt-block"),
+    truthPluginEnabled: document.getElementById("truth-plugin-enabled"),
+    truthPluginFields: document.getElementById("truth-plugin-fields"),
+    truthMaxChars: document.getElementById("truth-max-chars"),
+    truthRequireDeclarative: document.getElementById("truth-require-declarative"),
+    truthFeedDm: document.getElementById("truth-feed-dm"),
+    truthQuestionsEditor: document.getElementById("truth-questions-editor"),
+    addTruthQuestion: document.getElementById("add-truth-question"),
+    worldStartRegion: document.getElementById("world-start-region"),
+    regionsEditor: document.getElementById("regions-editor"),
+    addRegion: document.getElementById("add-region"),
+    itemsEditor: document.getElementById("items-editor"),
+    addItem: document.getElementById("add-item"),
     randomTurnOrder: document.getElementById("random-turn-order"),
+    scheduleStrict: document.getElementById("schedule-strict"),
     inviteBox: document.getElementById("invite-box"),
     inviteCode: document.getElementById("invite-code"),
     copyInvite: document.getElementById("copy-invite"),
@@ -181,6 +195,8 @@ const elements = {
     skipVoteBox: document.getElementById("skip-vote-box"),
     skipVoteButton: document.getElementById("skip-vote-button"),
     skipVoteStatus: document.getElementById("skip-vote-status"),
+    scheduleStatus: document.getElementById("schedule-status"),
+    holdButton: document.getElementById("hold-button"),
     dmThinking: document.getElementById("dm-thinking"),
     connectionStatus: document.getElementById("connection-status"),
     tokenUsage: document.getElementById("token-usage"),
@@ -190,13 +206,26 @@ const elements = {
     retryRoundButton: document.getElementById("retry-round-button"),
     leaveRoomButton: document.getElementById("leave-room-button"),
     characterCardButton: document.getElementById("character-card-button"),
-    characterCardModal: document.getElementById("character-card-modal"),
-    characterCardForm: document.getElementById("character-card-form"),
+    mapButton: document.getElementById("map-button"),
+    mapModal: document.getElementById("map-modal"),
+    mapBody: document.getElementById("map-body"),
+    mapClose: document.getElementById("map-close"),
+    codexButton: document.getElementById("codex-button"),
+    codexModal: document.getElementById("codex-modal"),
+    codexBody: document.getElementById("codex-body"),
+    codexClose: document.getElementById("codex-close"),
+    characterCardModal: document.getElementById("character-card-modal"),    characterCardForm: document.getElementById("character-card-form"),
     characterCardClose: document.getElementById("character-card-close"),
     ccDescription: document.getElementById("character-card-description"),
     ccPersonality: document.getElementById("character-card-personality"),
     ccStyle: document.getElementById("character-card-style"),
     ccExample: document.getElementById("character-card-example"),
+    truthButton: document.getElementById("truth-button"),
+    truthModal: document.getElementById("truth-modal"),
+    truthQuestions: document.getElementById("truth-questions"),
+    truthRoundStatus: document.getElementById("truth-round-status"),
+    truthError: document.getElementById("truth-error"),
+    truthClose: document.getElementById("truth-close"),
     keyRequiredModal: document.getElementById("key-required-modal"),
     keyRequiredForm: document.getElementById("key-required-form"),
     keyRequiredInput: document.getElementById("key-required-input"),
@@ -221,6 +250,15 @@ let votedFor = false;
 let lastStartedRound = 0;
 let oldestLoadedRound = null;
 let ownCharacterCard = null;
+let truthState = null;
+let roomState = null;
+let strictMode = false;
+let activePlayerIds = [];
+let hasMap = false;
+let mapSnapshot = null;
+let hasCodex = false;
+let codexSnapshot = null;
+let lastSectionLabel = null;
 const renderedActions = new Set();
 const playerColors = new Map();
 const MAX_LOG_ENTRIES = 2000;
@@ -239,10 +277,17 @@ function trimContainer(container, maximum) {
     while (container.children.length > maximum) {
         const removed = container.firstElementChild?.id === "game-banner"
             ? container.firstElementChild.nextElementSibling : container.firstElementChild;
-        if (removed && removed.dataset.actionKey) {
-            renderedActions.delete(removed.dataset.actionKey);
+        if (removed) {
+            if (removed.dataset && removed.dataset.actionKey) {
+                renderedActions.delete(removed.dataset.actionKey);
+            }
+            if (removed.querySelectorAll) {
+                removed.querySelectorAll("[data-action-key]").forEach((node) => {
+                    renderedActions.delete(node.dataset.actionKey);
+                });
+            }
+            removed.remove();
         }
-        removed?.remove();
     }
 }
 
@@ -256,24 +301,108 @@ function appendText(container, text, className, maximum = MAX_LOG_ENTRIES) {
     return entry;
 }
 
+let currentRoundBlock = null;
+
+function beginRoundBlock(title) {
+    elements.log.querySelectorAll(".round-block.current-round").forEach((block) => {
+        block.classList.remove("current-round");
+    });
+    const block = document.createElement("section");
+    block.className = "round-block current-round";
+    const heading = document.createElement("h3");
+    heading.className = "round-title";
+    heading.textContent = title;
+    block.appendChild(heading);
+    elements.log.appendChild(block);
+    currentRoundBlock = block;
+    trimContainer(elements.log, MAX_LOG_ENTRIES);
+    elements.log.scrollTop = elements.log.scrollHeight;
+    return block;
+}
+
+function ensureRoundBlock() {
+    if (!currentRoundBlock) {
+        beginRoundBlock("剧情");
+    }
+    return currentRoundBlock;
+}
+
 function startRound(roundNumber) {
     if (!Number.isInteger(roundNumber) || roundNumber <= lastStartedRound) {
         return;
     }
     lastStartedRound = roundNumber;
-    elements.log.querySelectorAll(".current-round").forEach((entry) => {
-        entry.classList.remove("current-round");
-    });
-    appendText(elements.log, `第 ${roundNumber} 回合：`, "round-heading current-round");
+    beginRoundBlock(`第 ${roundNumber} 回合`);
+}
+
+function startTimeSection(label) {
+    if (!label || label === lastSectionLabel) {
+        return;
+    }
+    lastSectionLabel = label;
+    beginRoundBlock(label);
 }
 
 function markRoundComplete() {
-    elements.log.querySelectorAll(".latest-complete-round").forEach((entry) => {
-        entry.classList.remove("latest-complete-round");
+    elements.log.querySelectorAll(".round-block.latest-complete-round").forEach((block) => {
+        block.classList.remove("latest-complete-round");
     });
-    elements.log.querySelectorAll(".current-round").forEach((entry) => {
-        entry.classList.add("latest-complete-round");
+    if (currentRoundBlock) {
+        currentRoundBlock.classList.add("latest-complete-round");
+    }
+}
+
+function declarationLine(playerName, action) {
+    const line = document.createElement("p");
+    line.className = `declaration${playerColorClass(playerName)}`;
+    const name = document.createElement("span");
+    name.className = "declaration-name";
+    name.textContent = playerName;
+    const text = document.createElement("span");
+    text.className = "declaration-text";
+    text.textContent = action;
+    line.append(name, text);
+    return line;
+}
+
+function sceneBlock(text) {
+    const scene = document.createElement("div");
+    scene.className = "scene-block";
+    const paragraph = document.createElement("p");
+    paragraph.className = "scene-text";
+    paragraph.textContent = text;
+    scene.appendChild(paragraph);
+    return scene;
+}
+
+function diceRow(pairs) {
+    const row = document.createElement("div");
+    row.className = "dice-row";
+    pairs.forEach(([player, roll]) => {
+        const chip = document.createElement("span");
+        chip.className = `dice-chip${playerColorClass(player)}`;
+        chip.textContent = `🎲 ${player} ${roll}/100`;
+        row.appendChild(chip);
     });
+    return row;
+}
+
+function outcomesWrap(pairs) {
+    const wrap = document.createElement("div");
+    wrap.className = "outcomes";
+    pairs.forEach(([player, text]) => {
+        const card = document.createElement("article");
+        card.className = `outcome${playerColorClass(player)}`;
+        const name = document.createElement("div");
+        name.className = "outcome-name";
+        name.textContent = player;
+        const body = document.createElement("p");
+        body.className = "outcome-text";
+        body.textContent = text;
+        card.append(name, body);
+        wrap.appendChild(card);
+    });
+    return wrap;
 }
 
 function setPlayerOrder(playerOrder = []) {
@@ -348,12 +477,17 @@ function showAction(roundNumber, playerName, action, colorIndex = null) {
     }
     renderedActions.add(actionKey);
     startRound(roundNumber);
-    const entry = appendText(
-        elements.log,
-        `${playerName} attempts: ${action}`,
-        `action-entry current-round${playerColorClass(playerName)}`,
-    );
-    entry.dataset.actionKey = actionKey;
+    const block = ensureRoundBlock();
+    let wrap = block.querySelector(".declarations");
+    if (!wrap) {
+        wrap = document.createElement("div");
+        wrap.className = "declarations";
+        block.appendChild(wrap);
+    }
+    const line = declarationLine(playerName, action);
+    line.dataset.actionKey = actionKey;
+    wrap.appendChild(line);
+    elements.log.scrollTop = elements.log.scrollHeight;
 }
 
 function syncActions(roundNumber, submittedActions = {}) {
@@ -371,12 +505,12 @@ function appendScenario(scenario) {
         return;
     }
     const entry = document.createElement("article");
-    entry.className = "state-entry opening-entry opening-scenario";
+    entry.className = "opening-entry opening-scenario";
     const label = document.createElement("strong");
-    label.className = "state-round-label";
+    label.className = "opening-label";
     label.textContent = "开场剧情";
     const narrative = document.createElement("p");
-    narrative.className = "state-narrative";
+    narrative.className = "opening-text";
     narrative.textContent = scenario;
     entry.append(label, narrative);
     const anchor = document.getElementById("game-banner");
@@ -385,25 +519,42 @@ function appendScenario(scenario) {
 }
 
 function appendState(text, roundNumber = null) {
-    const entry = document.createElement("article");
-    entry.className = "state-entry";
-    entry.classList.add(roundNumber === null ? "opening-entry" : "current-round");
-    if (roundNumber === null) entry.classList.add("opening-scenario");
-
-    const label = document.createElement("strong");
-    label.className = "state-round-label";
-    label.textContent = roundNumber ? `第 ${roundNumber} 回合结果` : "开场剧情";
-
-    const narrative = document.createElement("p");
-    narrative.className = "state-narrative";
-    narrative.textContent = text;
-
-    entry.append(label, narrative);
-    elements.log.appendChild(entry);
-    trimContainer(elements.log, MAX_LOG_ENTRIES);
-    if (roundNumber !== null) {
-        elements.log.scrollTop = elements.log.scrollHeight;
+    if (!text) {
+        return;
     }
+    const block = ensureRoundBlock();
+    if (block.querySelector(".scene-block")) {
+        return;
+    }
+    block.appendChild(sceneBlock(text));
+    trimContainer(elements.log, MAX_LOG_ENTRIES);
+    elements.log.scrollTop = elements.log.scrollHeight;
+}
+
+function appendSceneNote(text) {
+    if (!text) {
+        return;
+    }
+    const block = ensureRoundBlock();
+    const note = document.createElement("p");
+    note.className = "scene-note";
+    note.textContent = text;
+    block.appendChild(note);
+    elements.log.scrollTop = elements.log.scrollHeight;
+}
+
+function appendDice(pairs) {
+    if (!pairs.length) {
+        return;
+    }
+    ensureRoundBlock().appendChild(diceRow(pairs));
+}
+
+function appendOutcomes(pairs) {
+    if (!pairs.length) {
+        return;
+    }
+    ensureRoundBlock().appendChild(outcomesWrap(pairs));
 }
 
 function showError(message) {
@@ -451,6 +602,390 @@ function applyTurn(activePlayerId, activePlayerName) {
     updateSkipVote(activePlayerId);
 }
 
+function applyScheduleWindow(payload) {
+    strictMode = true;
+    roomState = "ACTIVE_TURN";
+    activePlayerIds = payload.active_player_ids || [];
+    updateTruthButton();
+    if (payload.game_time !== undefined) {
+        setGameClock(payload.game_time);
+    }
+    if (payload.player_order) {
+        setPlayerOrder(payload.player_order);
+    }
+    if (elements.skipVoteBox) {
+        elements.skipVoteBox.hidden = true;
+    }
+    const own = activePlayerIds.includes(clientId);
+    if (elements.holdButton) {
+        elements.holdButton.hidden = !own;
+    }
+    elements.actionInput.disabled = !own;
+    elements.actionInput.placeholder = own ? "输入你的行动…" : "等待其他玩家…";
+    if (own) {
+        elements.actionInput.focus();
+    }
+    if (!elements.scheduleStatus) {
+        return;
+    }
+    const waiting = payload.waiting || [];
+    const lines = waiting.map((item) => item.action
+        ? `${item.name} 仍在${item.action}（预计 ${item.ends_at_label}）`
+        : `${item.name} 正在观望`);
+    const selfWait = waiting.find((item) => item.player_id === clientId);
+    elements.scheduleStatus.replaceChildren();
+    const text = document.createElement("div");
+    if (selfWait && !own) {
+        text.textContent = selfWait.action
+            ? `你正在${selfWait.action}，预计 ${selfWait.ends_at_label} 完成`
+            : "你正在观望…";
+    } else {
+        text.textContent = lines.join("；");
+    }
+    elements.scheduleStatus.appendChild(text);
+    const peerRow = document.createElement("div");
+    peerRow.className = "skip-row";
+    const ids = payload.active_player_ids || [];
+    const names = payload.active_player_names || [];
+    ids.forEach((id, index) => {
+        if (id === clientId) {
+            return;
+        }
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = `跳过 ${names[index] || id}`;
+        button.addEventListener("click", () => send("skip_vote", { target: id }));
+        peerRow.appendChild(button);
+    });
+    if (peerRow.children.length) {
+        elements.scheduleStatus.appendChild(peerRow);
+    }
+    elements.scheduleStatus.hidden = text.textContent === "" && peerRow.children.length === 0;
+}
+
+function holdTurn() {
+    if (send("hold", {})) {
+        if (elements.holdButton) {
+            elements.holdButton.hidden = true;
+        }
+        elements.actionInput.disabled = true;
+    }
+}
+
+function updateMapButton() {
+    if (elements.mapButton) {
+        elements.mapButton.hidden = !hasMap || !authenticated;
+    }
+}
+
+function updateCodexButton() {
+    if (elements.codexButton) {
+        elements.codexButton.hidden = !hasCodex || !authenticated;
+    }
+}
+
+function openMap() {
+    if (!hasMap || !elements.mapModal) {
+        return;
+    }
+    elements.mapModal.hidden = false;
+    renderMap();
+    send("map_request", {});
+}
+
+function closeMap() {
+    if (elements.mapModal) {
+        elements.mapModal.hidden = true;
+    }
+}
+
+function mapChip(text, extraClass) {
+    const chip = document.createElement("span");
+    chip.className = extraClass ? `map-chip ${extraClass}` : "map-chip";
+    chip.textContent = text;
+    return chip;
+}
+
+function mapBlock(label, nodes) {
+    const block = document.createElement("div");
+    block.className = "map-block";
+    const caption = document.createElement("span");
+    caption.className = "map-block-label";
+    caption.textContent = label;
+    block.appendChild(caption);
+    const content = document.createElement("div");
+    content.className = "map-block-content";
+    nodes.forEach((node) => content.appendChild(node));
+    block.appendChild(content);
+    return block;
+}
+
+function renderMap() {
+    const body = elements.mapBody;
+    if (!body) {
+        return;
+    }
+    body.replaceChildren();
+    if (!mapSnapshot) {
+        const hint = document.createElement("p");
+        hint.className = "map-empty";
+        hint.textContent = "正在读取地图…";
+        body.appendChild(hint);
+        return;
+    }
+    const regions = mapSnapshot.regions || [];
+    const players = mapSnapshot.players || [];
+    const regionNames = new Map(regions.map((region) => [region.id, region.name]));
+    const myCharacter = ownCharacterCard ? ownCharacterCard.name : null;
+
+    // Team positions and packs.
+    const teams = document.createElement("section");
+    teams.className = "map-section";
+    const teamsHeading = document.createElement("h3");
+    teamsHeading.textContent = "队伍";
+    teams.appendChild(teamsHeading);
+    const teamList = document.createElement("div");
+    teamList.className = "map-team-list";
+    if (!players.length) {
+        const empty = document.createElement("p");
+        empty.className = "map-empty";
+        empty.textContent = "暂无角色";
+        teamList.appendChild(empty);
+    }
+    players.forEach((player) => {
+        const row = document.createElement("div");
+        row.className = "map-team";
+        const name = document.createElement("span");
+        name.className = "map-team-name";
+        name.textContent = player.name;
+        row.appendChild(name);
+        const loc = document.createElement("span");
+        loc.className = "map-team-loc";
+        if (player.in_transit_to) {
+            loc.classList.add("in-transit");
+            loc.textContent = `在途 → ${regionNames.get(player.in_transit_to) || player.in_transit_to}`;
+        } else {
+            loc.textContent = regionNames.get(player.region) || player.region || "未知";
+        }
+        row.appendChild(loc);
+        const pack = document.createElement("span");
+        pack.className = "map-team-pack";
+        const carried = player.carried || [];
+        pack.textContent = carried.length ? `携带：${carried.join("、")}` : "携带：（空）";
+        row.appendChild(pack);
+        teamList.appendChild(row);
+    });
+    teams.appendChild(teamList);
+    body.appendChild(teams);
+
+    // Regions, occupied ones first.
+    if (regions.length) {
+        const section = document.createElement("section");
+        section.className = "map-section";
+        const heading = document.createElement("h3");
+        heading.textContent = "地区";
+        section.appendChild(heading);
+        const grid = document.createElement("div");
+        grid.className = "map-grid";
+        const occupiedCount = (region) =>
+            players.filter((player) => player.region === region.id).length;
+        [...regions]
+            .sort((a, b) => occupiedCount(b) - occupiedCount(a))
+            .forEach((region) => {
+                const card = document.createElement("article");
+                card.className = "map-region";
+                const occupants = players.filter((player) => player.region === region.id);
+                if (myCharacter && occupants.some((player) => player.name === myCharacter)) {
+                    card.classList.add("map-here");
+                }
+                const title = document.createElement("h4");
+                title.textContent = region.name;
+                card.appendChild(title);
+                const occ = document.createElement("p");
+                occ.className = "map-occupants";
+                occ.textContent = occupants.length
+                    ? "在场：" + occupants.map((player) => player.name).join("、")
+                    : "无人在此";
+                card.appendChild(occ);
+
+                const items = region.items || [];
+                if (items.length) {
+                    card.appendChild(
+                        mapBlock(
+                            "物品",
+                            items.map((item) => {
+                                const line = document.createElement("div");
+                                line.className = "map-item";
+                                const label = document.createElement("span");
+                                label.className = "map-item-name";
+                                label.textContent = item.name;
+                                line.appendChild(label);
+                                if (item.clue) {
+                                    line.appendChild(mapChip("线索", "clue"));
+                                }
+                                if (item.carryable === false) {
+                                    line.appendChild(mapChip("不可携带", "locked"));
+                                }
+                                if (item.investigated) {
+                                    line.appendChild(mapChip("已调查", "done"));
+                                }
+                                if (item.summary) {
+                                    const summary = document.createElement("span");
+                                    summary.className = "map-item-summary";
+                                    summary.textContent = item.summary;
+                                    line.appendChild(summary);
+                                }
+                                if (item.investigated && item.detail) {
+                                    const detail = document.createElement("div");
+                                    detail.className = "map-item-detail";
+                                    detail.textContent = item.detail;
+                                    line.appendChild(detail);
+                                }
+                                return line;
+                            }),
+                        ),
+                    );
+                }
+                const reachable = region.reachable || [];
+                if (reachable.length) {
+                    card.appendChild(
+                        mapBlock(
+                            "可前往",
+                            reachable.map((target) => mapChip(target.name)),
+                        ),
+                    );
+                }
+                const locked = region.locked || [];
+                if (locked.length) {
+                    card.appendChild(
+                        mapBlock(
+                            "需条件",
+                            locked.map((target) => mapChip(target.name, "locked")),
+                        ),
+                    );
+                }
+                grid.appendChild(card);
+            });
+        section.appendChild(grid);
+        body.appendChild(section);
+    }
+}
+
+function openCodex() {
+    if (!hasCodex || !elements.codexModal) {
+        return;
+    }
+    elements.codexModal.hidden = false;
+    renderCodex();
+    send("codex_request", {});
+}
+
+function closeCodex() {
+    if (elements.codexModal) {
+        elements.codexModal.hidden = true;
+    }
+}
+
+function renderCodex() {
+    const body = elements.codexBody;
+    if (!body) {
+        return;
+    }
+    body.replaceChildren();
+    if (!codexSnapshot) {
+        const hint = document.createElement("p");
+        hint.className = "map-empty";
+        hint.textContent = "正在读取…";
+        body.appendChild(hint);
+        return;
+    }
+    const itemsSection = document.createElement("section");
+    itemsSection.className = "map-section";
+    const itemsTitle = document.createElement("h3");
+    itemsTitle.textContent = "已发现的物品";
+    itemsSection.appendChild(itemsTitle);
+    const items = codexSnapshot.items || [];
+    if (!items.length) {
+        const empty = document.createElement("p");
+        empty.className = "map-empty";
+        empty.textContent = "尚未发现任何物品。";
+        itemsSection.appendChild(empty);
+    } else {
+        const grid = document.createElement("div");
+        grid.className = "map-grid";
+        items.forEach((item) => {
+            const card = document.createElement("article");
+            card.className = "map-region";
+            const name = document.createElement("h4");
+            name.textContent = item.name;
+            card.appendChild(name);
+            const tags = [];
+            if (item.clue) {
+                tags.push("线索");
+            }
+            if (item.investigated) {
+                tags.push("已调查");
+            }
+            if (item.here) {
+                tags.push("随身携带");
+            }
+            const meta = document.createElement("p");
+            meta.className = "map-occupants";
+            const origin = item.origin ? `原本所在地：${item.origin}` : "";
+            meta.textContent = [origin, tags.join("·")].filter(Boolean).join(" · ");
+            card.appendChild(meta);
+            if (item.summary) {
+                const intro = document.createElement("p");
+                intro.className = "map-item-summary";
+                intro.textContent = item.summary;
+                card.appendChild(intro);
+            }
+            if (item.investigated && item.detail) {
+                const detail = document.createElement("div");
+                detail.className = "map-item-detail";
+                detail.textContent = item.detail;
+                card.appendChild(detail);
+            }
+            grid.appendChild(card);
+        });
+        itemsSection.appendChild(grid);
+    }
+    body.appendChild(itemsSection);
+
+    const eventsSection = document.createElement("section");
+    eventsSection.className = "map-section";
+    const eventsTitle = document.createElement("h3");
+    eventsTitle.textContent = "已触发的事件";
+    eventsSection.appendChild(eventsTitle);
+    const events = codexSnapshot.events || [];
+    if (!events.length) {
+        const empty = document.createElement("p");
+        empty.className = "map-empty";
+        empty.textContent = "尚未触发任何事件。";
+        eventsSection.appendChild(empty);
+    } else {
+        events.forEach((event) => {
+            const card = document.createElement("article");
+            card.className = "map-region";
+            const name = document.createElement("h4");
+            name.textContent = event.actor ? `${event.name}（${event.actor}）` : event.name;
+            card.appendChild(name);
+            if (event.region) {
+                const where = document.createElement("p");
+                where.className = "map-occupants";
+                where.textContent = `发生于：${event.region}`;
+                card.appendChild(where);
+            }
+            const desc = document.createElement("p");
+            desc.className = "map-item-summary";
+            desc.textContent = event.description;
+            card.appendChild(desc);
+            eventsSection.appendChild(card);
+        });
+    }
+    body.appendChild(eventsSection);
+}
+
 function showInviteCode(code) {
     if (!isHost || !code) {
         return;
@@ -463,6 +998,7 @@ function roomWasClosed(message) {
     authenticated = false;
     isHost = false;
     roomClosed = true;
+    roomState = null;
     savedAuth = null;
     writeStored("sessionStorage", "artificialDungeonAuth", null);
     elements.grid.hidden = true;
@@ -477,6 +1013,19 @@ function roomWasClosed(message) {
     elements.characterCardButton.hidden = true;
     elements.characterCardModal.hidden = true;
     elements.keyRequiredModal.hidden = true;
+    hideTruthUI();
+    strictMode = false;
+    activePlayerIds = [];
+    elements.holdButton.hidden = true;
+    elements.scheduleStatus.hidden = true;
+    hasMap = false;
+    mapSnapshot = null;
+    elements.mapButton.hidden = true;
+    elements.mapModal.hidden = true;
+    hasCodex = false;
+    codexSnapshot = null;
+    elements.codexButton.hidden = true;
+    elements.codexModal.hidden = true;
     ownCharacterCard = null;
     elements.loginModal.hidden = false;
     elements.loginError.textContent = message;
@@ -486,6 +1035,7 @@ function roomWasClosed(message) {
 function wasRemoved(message) {
     authenticated = false;
     isHost = false;
+    roomState = null;
     savedAuth = null;
     writeStored("sessionStorage", "artificialDungeonAuth", null);
     elements.grid.hidden = true;
@@ -501,6 +1051,19 @@ function wasRemoved(message) {
     elements.characterCardButton.hidden = true;
     elements.characterCardModal.hidden = true;
     elements.keyRequiredModal.hidden = true;
+    hideTruthUI();
+    strictMode = false;
+    activePlayerIds = [];
+    elements.holdButton.hidden = true;
+    elements.scheduleStatus.hidden = true;
+    hasMap = false;
+    mapSnapshot = null;
+    elements.mapButton.hidden = true;
+    elements.mapModal.hidden = true;
+    hasCodex = false;
+    codexSnapshot = null;
+    elements.codexButton.hidden = true;
+    elements.codexModal.hidden = true;
     ownCharacterCard = null;
     elements.loginModal.hidden = false;
     elements.loginError.textContent = message;
@@ -517,6 +1080,7 @@ function leaveRoom() {
     authenticated = false;
     isHost = false;
     amSpectator = false;
+    roomState = null;
     savedAuth = null;
     writeStored("sessionStorage", "artificialDungeonAuth", null);
     for (const child of [...elements.log.children]) {
@@ -542,6 +1106,19 @@ function leaveRoom() {
     elements.characterCardButton.hidden = true;
     elements.characterCardModal.hidden = true;
     elements.keyRequiredModal.hidden = true;
+    hideTruthUI();
+    strictMode = false;
+    activePlayerIds = [];
+    elements.holdButton.hidden = true;
+    elements.scheduleStatus.hidden = true;
+    hasMap = false;
+    mapSnapshot = null;
+    elements.mapButton.hidden = true;
+    elements.mapModal.hidden = true;
+    hasCodex = false;
+    codexSnapshot = null;
+    elements.codexButton.hidden = true;
+    elements.codexModal.hidden = true;
     ownCharacterCard = null;
     elements.loginModal.hidden = false;
     elements.loginError.textContent = "你已离开房间，它仍在运行，可用邀请码重新加入。";
@@ -568,6 +1145,22 @@ function cacheOwnCharacterCard(payload) {
     elements.characterCardButton.hidden = amSpectator || !ownCharacterCard;
 }
 
+function rememberOwnCharacter(payload) {
+    // The client only learns its claimed character after the host claims it or a
+    // roster update arrives; keep the reconnect token's character in sync so a
+    // reconnect does not look like an intentional switch to spectating.
+    if (!savedAuth || !myName) {
+        return;
+    }
+    const characters = payload.characters || [];
+    const mine = characters.find((char) => char.claimed_by === myName);
+    const next = mine ? mine.name : null;
+    if (savedAuth.character !== next) {
+        savedAuth.character = next;
+        writeStored("sessionStorage", "artificialDungeonAuth", JSON.stringify(savedAuth));
+    }
+}
+
 function openCharacterCard() {
     if (!ownCharacterCard) {
         return;
@@ -582,6 +1175,134 @@ function openCharacterCard() {
 function closeCharacterCard() {
     elements.characterCardModal.hidden = true;
 }
+
+function applyTruthState(state) {
+    truthState = state && typeof state === "object" ? state : null;
+    if (!elements.truthButton) {
+        return;
+    }
+    elements.truthButton.classList.remove("truth-new");
+    updateTruthButton();
+    if (elements.truthModal && !elements.truthModal.hidden) {
+        renderTruth();
+    }
+}
+
+function updateTruthButton() {
+    if (!elements.truthButton) {
+        return;
+    }
+    const active = roomState === "ACTIVE_TURN" || roomState === "AWAITING_LLM";
+    elements.truthButton.hidden = !(truthState && truthState.enabled && active && !leftRoom);
+}
+
+function truthRoundUsed() {
+    return Boolean(truthState && truthState.your_used_round === truthState.round);
+}
+
+function updateTruthRoundStatus() {
+    if (!truthState || !truthState.enabled) {
+        elements.truthRoundStatus.textContent = "本房间未启用『可能的真相』。";
+    } else if (!(truthState.questions || []).length) {
+        elements.truthRoundStatus.textContent = "还没有揭晓的提问，请等待剧情推进。";
+    } else if (amSpectator) {
+        elements.truthRoundStatus.textContent = "你正在旁观，选择角色后才能提交真相。";
+    } else if (truthRoundUsed()) {
+        elements.truthRoundStatus.textContent =
+            `第 ${truthState.round} 回合：你已提交过（每轮一次）。`;
+    } else {
+        elements.truthRoundStatus.textContent =
+            `第 ${truthState.round} 回合：选择一个提问提交你的真相（每轮一次）。`;
+    }
+}
+
+function renderTruth() {
+    elements.truthError.textContent = "";
+    elements.truthQuestions.replaceChildren();
+    updateTruthRoundStatus();
+    if (!truthState || !truthState.enabled) {
+        return;
+    }
+    const locked = amSpectator || truthRoundUsed();
+    (truthState.questions || []).forEach((question) => {
+        const article = document.createElement("article");
+        article.className = "truth-question";
+        const title = document.createElement("h3");
+        title.textContent = question.text;
+        article.appendChild(title);
+        const history = document.createElement("ul");
+        history.className = "truth-history";
+        const entries = question.history || [];
+        if (entries.length) {
+            entries.forEach((entry) => {
+                const item = document.createElement("li");
+                item.textContent = `${entry.character}：${entry.text}`;
+                history.appendChild(item);
+            });
+        } else {
+            const item = document.createElement("li");
+            item.className = "truth-empty";
+            item.textContent = "（暂无被采纳的真相）";
+            history.appendChild(item);
+        }
+        article.appendChild(history);
+        const form = document.createElement("form");
+        form.className = "truth-form";
+        form.dataset.questionId = question.id;
+        const input = document.createElement("textarea");
+        input.maxLength = truthState.max_answer_chars || 500;
+        input.rows = 2;
+        input.placeholder = "以陈述句写下你的真相或片段…";
+        input.disabled = locked;
+        const submit = document.createElement("button");
+        submit.type = "submit";
+        submit.textContent = "提交真相";
+        submit.disabled = locked;
+        form.append(input, submit);
+        form.addEventListener("submit", (event) => {
+            event.preventDefault();
+            const answer = input.value.trim();
+            if (!answer || answer.length > (truthState.max_answer_chars || 500)) {
+                elements.truthError.textContent =
+                    `真相内容不能为空，且不能超过 ${truthState.max_answer_chars || 500} 字。`;
+                return;
+            }
+            if (send("truth_submit", { question_id: question.id, answer })) {
+                input.disabled = true;
+                submit.disabled = true;
+                submit.textContent = "判定中…";
+                elements.truthError.textContent = "正在判定你的真相…";
+            }
+        });
+        article.appendChild(form);
+        elements.truthQuestions.appendChild(article);
+    });
+}
+
+function openTruth() {
+    elements.truthModal.hidden = false;
+    elements.truthButton.classList.remove("truth-new");
+    renderTruth();
+    send("truth_request", {});
+}
+
+function closeTruth() {
+    elements.truthModal.hidden = true;
+}
+
+function hideTruthUI() {
+    truthState = null;
+    elements.truthButton.hidden = true;
+    elements.truthButton.classList.remove("truth-new");
+    elements.truthModal.hidden = true;
+}
+
+elements.truthButton.addEventListener("click", openTruth);
+elements.truthClose.addEventListener("click", closeTruth);
+elements.mapButton.addEventListener("click", openMap);
+elements.mapClose.addEventListener("click", closeMap);
+elements.codexButton.addEventListener("click", openCodex);
+elements.codexClose.addEventListener("click", closeCodex);
 
 elements.characterCardButton.addEventListener("click", openCharacterCard);
 elements.characterCardClose.addEventListener("click", closeCharacterCard);
@@ -599,6 +1320,36 @@ elements.characterCardForm.addEventListener("submit", (event) => {
     }
 });
 
+function buildHistoryBlock(record) {
+    const block = document.createElement("section");
+    block.className = "round-block";
+    const heading = document.createElement("h3");
+    heading.className = "round-title";
+    heading.textContent = `第 ${record.round_number} 回合`;
+    block.appendChild(heading);
+    const actions = Object.entries(record.actions || {});
+    if (actions.length) {
+        const wrap = document.createElement("div");
+        wrap.className = "declarations";
+        actions.forEach(([playerName, action]) => {
+            wrap.appendChild(declarationLine(playerName, action));
+        });
+        block.appendChild(wrap);
+    }
+    if (record.global_narrative) {
+        block.appendChild(sceneBlock(record.global_narrative));
+    }
+    const dice = Object.entries(record.dice_results || {});
+    if (dice.length) {
+        block.appendChild(diceRow(dice));
+    }
+    const outcomes = Object.entries(record.player_resolutions || {});
+    if (outcomes.length) {
+        block.appendChild(outcomesWrap(outcomes));
+    }
+    return block;
+}
+
 function renderHistoryRound(record) {
     if (!record || !Number.isInteger(record.round_number)) {
         return;
@@ -609,28 +1360,9 @@ function renderHistoryRound(record) {
         showAction(record.round_number, playerName, action);
     });
     appendState(record.global_narrative, record.round_number);
-    Object.entries(record.dice_results || {}).forEach(([player, roll]) => {
-        appendText(
-            elements.log,
-            `🎲 ${player} rolled ${roll}/100`,
-            `dice-entry current-round${playerColorClass(player)}`,
-        );
-    });
-    Object.entries(record.player_resolutions || {}).forEach(([player, resolution]) => {
-        appendText(
-            elements.log,
-            `[${player}] ${resolution}`,
-            `resolution-entry current-round${playerColorClass(player)}`,
-        );
-    });
+    appendDice(Object.entries(record.dice_results || {}));
+    appendOutcomes(Object.entries(record.player_resolutions || {}));
     markRoundComplete();
-}
-
-function historyText(text, className) {
-    const entry = document.createElement("p");
-    entry.className = className;
-    entry.textContent = text;
-    return entry;
 }
 
 function ensureHistoryAnchor() {
@@ -677,43 +1409,7 @@ function renderEarlierRounds(records) {
             return;
         }
         setPlayerOrder(record.player_order || []);
-        fragment.appendChild(
-            historyText(`Round ${record.round_number}:`, "round-heading"),
-        );
-        Object.entries(record.actions || {}).forEach(([playerName, action]) => {
-            fragment.appendChild(
-                historyText(
-                    `${playerName} attempts: ${action}`,
-                    `action-entry${playerColorClass(playerName)}`,
-                ),
-            );
-        });
-        const entry = document.createElement("article");
-        entry.className = "state-entry";
-        const label = document.createElement("strong");
-        label.className = "state-round-label";
-        label.textContent = `第 ${record.round_number} 回合结果`;
-        const narrative = document.createElement("p");
-        narrative.className = "state-narrative";
-        narrative.textContent = record.global_narrative;
-        entry.append(label, narrative);
-        fragment.appendChild(entry);
-        Object.entries(record.dice_results || {}).forEach(([player, roll]) => {
-            fragment.appendChild(
-                historyText(
-                    `🎲 ${player} rolled ${roll}/100`,
-                    `dice-entry${playerColorClass(player)}`,
-                ),
-            );
-        });
-        Object.entries(record.player_resolutions || {}).forEach(([player, resolution]) => {
-            fragment.appendChild(
-                historyText(
-                    `[${player}] ${resolution}`,
-                    `resolution-entry${playerColorClass(player)}`,
-                ),
-            );
-        });
+        fragment.appendChild(buildHistoryBlock(record));
     });
     anchor.after(fragment);
     oldestLoadedRound = records[0].round_number;
@@ -728,6 +1424,15 @@ function applySnapshot(payload) {
     isHost = payload.is_host;
     myName = payload.name;
     amSpectator = !payload.character;
+    roomState = payload.state;
+    strictMode = payload.schedule_mode === "strict";
+    hasMap = Boolean(payload.has_map);
+    hasCodex = Boolean(payload.has_codex);
+    mapSnapshot = null;
+    codexSnapshot = null;
+    lastSectionLabel = null;
+    updateMapButton();
+    updateCodexButton();
     cacheOwnCharacterCard(payload);
     setGameClock(payload.game_time);
     elements.retryRoundButton.hidden = !isHost || !payload.round_paused;
@@ -762,7 +1467,11 @@ function applySnapshot(payload) {
         }
     }
     if (payload.round_number) {
-        startRound(payload.round_number);
+        if (strictMode && payload.game_time) {
+            startTimeSection(payload.game_time);
+        } else {
+            startRound(payload.round_number);
+        }
         syncActions(payload.round_number, payload.submitted_actions);
     }
     if (payload.catchup && payload.catchup.missed_minutes > 0) {
@@ -779,8 +1488,12 @@ function applySnapshot(payload) {
     if (payload.state === "ACTIVE_TURN") {
         applyTurn(payload.active_player_id, payload.active_player_name);
     }
+    if (payload.schedule) {
+        applyScheduleWindow(payload.schedule);
+    }
     showHostStep(payload.state);
     elements.endGameButton.hidden = !isHost || !["ACTIVE_TURN", "AWAITING_LLM"].includes(payload.state);
+    applyTruthState(payload.truth);
 }
 
 function handleMessage(message) {
@@ -822,6 +1535,7 @@ function handleMessage(message) {
         elements.loginError.textContent = "";
         elements.joinStep.hidden = true;
         applySnapshot(payload);
+        rememberOwnCharacter(payload);
         showInviteCode(payload.invite_code);
         if (payload.needs_key && isHost) {
             elements.keyRequiredModal.hidden = false;
@@ -845,12 +1559,31 @@ function handleMessage(message) {
                 button.hidden = true;
             }
         }
+    } else if (type === "turn_window") {
+        setThinking(false);
+        strictMode = true;
+        startTimeSection(payload.game_time);
+        applyScheduleWindow(payload);
     } else if (type === "turn_directive") {
         startRound(payload.round_number);
         syncActions(payload.round_number, payload.submitted_actions);
         applyTurn(payload.active_player_id, payload.active_player_name);
     } else if (type === "round_start") {
-        startRound(payload.round_number);
+        if (!strictMode) {
+            startRound(payload.round_number);
+        }
+    } else if (type === "scene_text") {
+        appendSceneNote(payload.text);
+    } else if (type === "map_state") {
+        mapSnapshot = payload;
+        if (!elements.mapModal.hidden) {
+            renderMap();
+        }
+    } else if (type === "codex_state") {
+        codexSnapshot = payload;
+        if (!elements.codexModal.hidden) {
+            renderCodex();
+        }
     } else if (type === "action_echo") {
         showAction(
             payload.round_number,
@@ -860,6 +1593,8 @@ function handleMessage(message) {
         );
     } else if (type === "state_update") {
         setThinking(false);
+        roomState = "ACTIVE_TURN";
+        updateTruthButton();
         setPlayerOrder(payload.player_order);
         if (payload.game_time !== undefined) {
             setGameClock(payload.game_time);
@@ -867,29 +1602,24 @@ function handleMessage(message) {
         if (payload.round_title) {
             elements.title.textContent = displayGameTitle(payload.round_title);
         }
-        startRound(payload.round_number);
+        if (strictMode) {
+            startTimeSection(payload.game_time);
+        } else {
+            startRound(payload.round_number);
+        }
         syncActions(payload.round_number, payload.submitted_actions);
         appendState(payload.global_narrative, payload.round_number);
-        Object.entries(payload.dice_results || {}).forEach(([player, roll]) => {
-            appendText(
-                elements.log,
-                `🎲 ${player} rolled ${roll}/100`,
-                `dice-entry current-round${playerColorClass(player)}`,
-            );
-        });
-        Object.entries(payload.player_resolutions).forEach(([player, resolution]) => {
-            appendText(
-                elements.log,
-                `[${player}] ${resolution}`,
-                `resolution-entry current-round${playerColorClass(player)}`,
-            );
-        });
+        appendDice(Object.entries(payload.dice_results || {}));
+        appendOutcomes(Object.entries(payload.player_resolutions || {}));
         markRoundComplete();
     } else if (type === "player_roster") {
         renderPlayers(payload);
         cacheOwnCharacterCard(payload);
+        rememberOwnCharacter(payload);
     } else if (type === "dm_thinking") {
         setThinking(Boolean(payload.active));
+        roomState = payload.active ? "AWAITING_LLM" : "ACTIVE_TURN";
+        updateTruthButton();
         if (payload.active) {
             elements.retryRoundButton.hidden = true;
             elements.endGameButton.hidden = !isHost;
@@ -943,6 +1673,20 @@ function handleMessage(message) {
         ].join("\n");
     } else if (type === "game_ended") {
         setThinking(false);
+        roomState = "ENDED";
+        hideTruthUI();
+    strictMode = false;
+    activePlayerIds = [];
+    elements.holdButton.hidden = true;
+    elements.scheduleStatus.hidden = true;
+    hasMap = false;
+    mapSnapshot = null;
+    elements.mapButton.hidden = true;
+    elements.mapModal.hidden = true;
+    hasCodex = false;
+    codexSnapshot = null;
+    elements.codexButton.hidden = true;
+    elements.codexModal.hidden = true;
         elements.actionInput.disabled = true;
         elements.endGameButton.hidden = true;
         elements.retryRoundButton.hidden = true;
@@ -952,12 +1696,27 @@ function handleMessage(message) {
     } else if (type === "removed") {
         wasRemoved(payload.msg || "你已被移出游戏，重新加入即可继续。");
     } else if (type === "skip_vote") {
-        elements.skipVoteStatus.textContent = `${payload.target}: ${payload.votes}/${payload.needed}`;
+        const message = `跳过 ${payload.target}：${payload.votes}/${payload.needed}`;
+        if (strictMode) {
+            if (elements.scheduleStatus) {
+                elements.scheduleStatus.hidden = false;
+                const first = elements.scheduleStatus.firstElementChild;
+                if (first) {
+                    first.textContent = message;
+                } else {
+                    elements.scheduleStatus.textContent = message;
+                }
+            }
+        } else {
+            elements.skipVoteStatus.textContent = message;
+        }
         if (payload.voter === myName) {
             votedFor = true;
             elements.skipVoteButton.disabled = true;
         }
     } else if (type === "scenario_ready") {
+        roomState = "AWAITING_PLAYERS";
+        updateTruthButton();
         elements.hostModal.hidden = false;
         elements.endGameButton.hidden = true;
         elements.title.textContent = payload.title;
@@ -966,8 +1725,58 @@ function handleMessage(message) {
         elements.lobbyStep.hidden = false;
         if (payload.characters) {
             renderPlayers({ players: [], characters: payload.characters });
+            rememberOwnCharacter(payload);
         }
         elements.scenarioSubmit.disabled = false;
+    } else if (type === "truth_state") {
+        applyTruthState(payload);
+    } else if (type === "truth_question") {
+        if (truthState && Array.isArray(truthState.questions)) {
+            if (!truthState.questions.some((question) => question.id === payload.id)) {
+                truthState.questions.push({
+                    id: payload.id,
+                    text: payload.text,
+                    history: [],
+                });
+            }
+            if (elements.truthModal.hidden) {
+                elements.truthButton.classList.add("truth-new");
+            } else {
+                renderTruth();
+            }
+        }
+    } else if (type === "truth_answer") {
+        const question = truthState?.questions?.find((item) => item.id === payload.question_id);
+        if (question) {
+            question.history = question.history || [];
+            question.history.push({ character: payload.character, text: payload.text });
+            if (!elements.truthModal.hidden) {
+                renderTruth();
+            } else if (!ownCharacterCard || payload.character !== ownCharacterCard.name) {
+                elements.truthButton.classList.add("truth-new");
+            }
+        }
+    } else if (type === "truth_result") {
+        if (payload.valid === null) {
+            renderTruth();
+            elements.truthError.textContent = payload.reason || "裁判暂时不可用，请稍后重试。";
+        } else {
+            if (truthState) {
+                truthState.your_used_round = truthState.round;
+            }
+            renderTruth();
+            if (payload.valid) {
+                appendText(
+                    elements.chatMessages,
+                    "系统：你的可能真相已被采纳，将在下一回合供主持人参考。",
+                    "chat-entry",
+                    MAX_CHAT_ENTRIES,
+                );
+            } else {
+                elements.truthError.textContent =
+                    `${payload.reason || "该提交未被采纳。"}（本轮提交次数已消耗）`;
+            }
+        }
     } else if (type === "error") {
         showError(payload.msg || "未知的服务器错误。");
         if (!elements.keyRequiredModal.hidden) {
@@ -1420,9 +2229,260 @@ function collectSampling() {
     return sampling;
 }
 
+let truthQuestionSerial = 0;
+
+function updateTruthConditionFields(row) {
+    const condition = row.querySelector(".truth-question-condition").value;
+    row.querySelector(".truth-condition-event").hidden = condition !== "event";
+    row.querySelector(".truth-condition-day").hidden = condition !== "time";
+    row.querySelector(".truth-condition-clock").hidden = condition !== "time";
+    row.querySelector(".truth-condition-round").hidden = condition !== "round";
+}
+
+function makeTruthQuestionRow(question = {}) {
+    const row = document.createElement("div");
+    row.className = "config-row truth-question-row";
+    row.dataset.questionId =
+        typeof question.id === "string" && question.id.trim()
+            ? question.id.trim()
+            : `q${++truthQuestionSerial}`;
+    const text = document.createElement("input");
+    text.className = "truth-question-text";
+    text.maxLength = 2000;
+    text.placeholder = "提问，例如：谁在说谎？";
+    text.value = question.text || "";
+    const condition = document.createElement("select");
+    condition.className = "truth-question-condition";
+    [
+        ["start", "开团即出现"],
+        ["event", "事件触发后"],
+        ["time", "游戏内时刻"],
+        ["round", "第 N 回合"],
+    ].forEach(([value, label]) => {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = label;
+        condition.appendChild(option);
+    });
+    condition.value = ["start", "event", "time", "round"].includes(question.condition)
+        ? question.condition
+        : "start";
+    condition.addEventListener("change", () => updateTruthConditionFields(row));
+    const eventName = document.createElement("input");
+    eventName.className = "truth-condition-event";
+    eventName.maxLength = 80;
+    eventName.placeholder = "事件名（与定时事件一致）";
+    eventName.value = question.event_name || "";
+    const day = document.createElement("input");
+    day.type = "number";
+    day.min = 0;
+    day.max = 100000;
+    day.className = "truth-condition-day";
+    day.title = "Day";
+    day.value = question.day ?? 1;
+    const clock = document.createElement("input");
+    clock.type = "time";
+    clock.className = "truth-condition-clock";
+    clock.title = "Time";
+    clock.value = minutesToTime(question.minute ?? 0);
+    const round = document.createElement("input");
+    round.type = "number";
+    round.min = 0;
+    round.max = 100000;
+    round.className = "truth-condition-round";
+    round.title = "第几回合";
+    round.value = question.round_number ?? 1;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "remove-row";
+    remove.textContent = "×";
+    remove.addEventListener("click", () => row.remove());
+    row.append(text, condition, eventName, day, clock, round, remove);
+    elements.truthQuestionsEditor.appendChild(row);
+    updateTruthConditionFields(row);
+    return row;
+}
+
+function collectPlugins() {
+    if (!elements.truthPluginEnabled.checked) {
+        return [];
+    }
+    const questions = [...elements.truthQuestionsEditor.querySelectorAll(".truth-question-row")]
+        .map((row) => {
+            const condition = row.querySelector(".truth-question-condition").value;
+            const question = {
+                id: row.dataset.questionId,
+                text: row.querySelector(".truth-question-text").value.trim(),
+                condition,
+            };
+            if (condition === "event") {
+                question.event_name = row.querySelector(".truth-condition-event").value.trim();
+            } else if (condition === "time") {
+                const [hours, minutes] = (
+                    row.querySelector(".truth-condition-clock").value || "06:30"
+                )
+                    .split(":")
+                    .map((part) => Number.parseInt(part, 10) || 0);
+                question.day = Number.parseInt(row.querySelector(".truth-condition-day").value, 10) || 0;
+                question.minute = hours * 60 + minutes;
+            } else if (condition === "round") {
+                question.round_number =
+                    Number.parseInt(row.querySelector(".truth-condition-round").value, 10) || 0;
+            }
+            return question;
+        })
+        .filter((question) => question.text);
+    return [
+        {
+            type: "possible_truths",
+            enabled: true,
+            config: {
+                questions,
+                max_answer_chars: Number.parseInt(elements.truthMaxChars.value, 10) || 500,
+                require_declarative: elements.truthRequireDeclarative.checked,
+                feed_dm: elements.truthFeedDm.checked,
+            },
+        },
+    ];
+}
+
+elements.addTruthQuestion.addEventListener("click", () => makeTruthQuestionRow());
+elements.truthPluginEnabled.addEventListener("change", () => {
+    elements.truthPluginFields.hidden = !elements.truthPluginEnabled.checked;
+});
+
+function configInput(className, maxLength, placeholder, value = "") {
+    const input = document.createElement("input");
+    input.className = className;
+    input.maxLength = maxLength;
+    input.placeholder = placeholder;
+    input.value = value;
+    return input;
+}
+
+function configTextarea(className, placeholder, value = "") {
+    const area = document.createElement("textarea");
+    area.className = className;
+    area.rows = 2;
+    area.maxLength = 10000;
+    area.placeholder = placeholder;
+    area.value = value;
+    return area;
+}
+
+function configCheck(className, label, checked) {
+    const wrapper = document.createElement("label");
+    wrapper.className = `check-label ${className}`;
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = checked;
+    wrapper.append(input, label);
+    return wrapper;
+}
+
+function configRemove(row) {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "remove-row";
+    remove.textContent = "×";
+    remove.addEventListener("click", () => row.remove());
+    return remove;
+}
+
+function splitList(value) {
+    return value
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+}
+
+function makeRegionRow(region = {}) {
+    const row = document.createElement("div");
+    row.className = "config-row region-row";
+    const linkText = (region.links || [])
+        .map((link) => (link.requires_item ? `${link.to}>${link.requires_item}` : link.to))
+        .join(", ");
+    row.append(
+        configInput("region-id", 64, "地区id", region.id || ""),
+        configInput("region-name", 80, "名称", region.name || ""),
+        configInput("region-items", 400, "物品id，逗号分隔", (region.items || []).join(", ")),
+        configInput("region-links", 400, "连接：目标id 或 目标id>物品id", linkText),
+        configCheck("region-private", "private", region.private === true),
+        configTextarea("region-arrival", "到达固定文本", region.arrival_text || ""),
+        configRemove(row),
+    );
+    elements.regionsEditor.appendChild(row);
+    return row;
+}
+
+function makeItemRow(item = {}) {
+    const row = document.createElement("div");
+    row.className = "config-row item-row";
+    row.append(
+        configInput("item-id", 64, "物品id", item.id || ""),
+        configInput("item-name", 80, "名称", item.name || ""),
+        configInput("item-region", 64, "所属地区id", item.region || ""),
+        configInput("item-summary", 2000, "简述", item.summary || ""),
+        configCheck("item-clue", "线索", item.clue === true),
+        configCheck("item-key", "关键", item.key_item === true),
+        configCheck("item-carryable", "可携带", item.carryable !== false),
+        configTextarea("item-investigate", "调查后的固定文本", item.investigate_text || ""),
+        configRemove(row),
+    );
+    elements.itemsEditor.appendChild(row);
+    return row;
+}
+
+function collectRegions() {
+    return [...elements.regionsEditor.querySelectorAll(".region-row")]
+        .map((row) => ({
+            id: row.querySelector(".region-id").value.trim(),
+            name: row.querySelector(".region-name").value.trim(),
+            arrival_text: row.querySelector(".region-arrival").value.trim(),
+            items: splitList(row.querySelector(".region-items").value),
+            links: splitList(row.querySelector(".region-links").value).map((entry) => {
+                const [to, requiresItem] = entry.split(">");
+                const link = { to: to.trim() };
+                if (requiresItem && requiresItem.trim()) {
+                    link.requires_item = requiresItem.trim();
+                }
+                return link;
+            }),
+            private: row.querySelector(".region-private input").checked,
+        }))
+        .filter((region) => region.id && region.name);
+}
+
+function collectItems() {
+    return [...elements.itemsEditor.querySelectorAll(".item-row")]
+        .map((row) => ({
+            id: row.querySelector(".item-id").value.trim(),
+            name: row.querySelector(".item-name").value.trim(),
+            region: row.querySelector(".item-region").value.trim(),
+            summary: row.querySelector(".item-summary").value.trim(),
+            investigate_text: row.querySelector(".item-investigate").value.trim(),
+            clue: row.querySelector(".item-clue input").checked,
+            key_item: row.querySelector(".item-key input").checked,
+            carryable: row.querySelector(".item-carryable input").checked,
+        }))
+        .filter((item) => item.id && item.name);
+}
+
+function collectWorld() {
+    const regions = collectRegions();
+    const items = collectItems();
+    const world = regions.length
+        ? { start_region: elements.worldStartRegion.value.trim() || regions[0].id }
+        : null;
+    return { world, regions, items };
+}
+
+elements.addRegion.addEventListener("click", () => makeRegionRow());
+elements.addItem.addEventListener("click", () => makeItemRow());
+
 elements.addPromptBlock.addEventListener("click", () => makePromptBlockRow());
 
-function makeTimeRuleRow(activity = "", minimum = "", maximum = "") {
+function makeTimeRuleRow(activity = "", minimum = "", maximum = "", keys = []) {
     const row = document.createElement("div");
     row.className = "config-row time-rule-row";
     const activityInput = document.createElement("input");
@@ -1430,6 +2490,11 @@ function makeTimeRuleRow(activity = "", minimum = "", maximum = "") {
     activityInput.maxLength = 80;
     activityInput.placeholder = "活动（例如 搜查房间）";
     activityInput.value = activity;
+    const keysInput = document.createElement("input");
+    keysInput.className = "rule-keys";
+    keysInput.maxLength = 400;
+    keysInput.placeholder = "关键词，逗号分隔（可选）";
+    keysInput.value = (Array.isArray(keys) ? keys : []).join(", ");
     const minInput = document.createElement("input");
     minInput.type = "number";
     minInput.min = 0;
@@ -1449,7 +2514,7 @@ function makeTimeRuleRow(activity = "", minimum = "", maximum = "") {
     remove.className = "remove-row";
     remove.textContent = "×";
     remove.addEventListener("click", () => row.remove());
-    row.append(activityInput, minInput, maxInput, remove);
+    row.append(activityInput, keysInput, minInput, maxInput, remove);
     elements.timeRulesEditor.appendChild(row);
     return row;
 }
@@ -1462,6 +2527,28 @@ function makeEventRow(event = {}) {
     name.maxLength = 80;
     name.placeholder = "事件名";
     name.value = event.name || "";
+    const region = document.createElement("input");
+    region.className = "event-region";
+    region.maxLength = 64;
+    region.placeholder = "地区id（填了就按地区触发）";
+    region.value = event.region || "";
+    const when = document.createElement("select");
+    when.className = "event-when";
+    [
+        ["enter", "进入地区"],
+        ["time", "该地区到点"],
+    ].forEach(([value, label]) => {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = label;
+        when.appendChild(option);
+    });
+    when.value = event.when === "time" ? "time" : "enter";
+    const actor = document.createElement("input");
+    actor.className = "event-actor";
+    actor.maxLength = 80;
+    actor.placeholder = "NPC名（可选）";
+    actor.value = event.actor || "";
     const day = document.createElement("input");
     day.type = "number";
     day.min = 0;
@@ -1491,7 +2578,7 @@ function makeEventRow(event = {}) {
     remove.className = "remove-row";
     remove.textContent = "×";
     remove.addEventListener("click", () => row.remove());
-    row.append(name, day, time, description, publicLabel, remove);
+    row.append(name, region, when, actor, day, time, description, publicLabel, remove);
     elements.eventsEditor.appendChild(row);
     return row;
 }
@@ -1577,6 +2664,11 @@ function collectTimeRules() {
     return [...elements.timeRulesEditor.querySelectorAll(".time-rule-row")]
         .map((row) => ({
             activity: row.querySelector(".rule-activity").value.trim(),
+            keys: row
+                .querySelector(".rule-keys")
+                .value.split(",")
+                .map((key) => key.trim())
+                .filter(Boolean),
             minutes_min: parseInt(row.querySelector(".rule-min").value, 10),
             minutes_max: parseInt(row.querySelector(".rule-max").value, 10),
         }))
@@ -1589,20 +2681,21 @@ function collectTimeRules() {
 }
 
 function collectEvents() {
-    if (!elements.timeEnabled.checked) {
-        return [];
-    }
     return [...elements.eventsEditor.querySelectorAll(".event-row")]
         .map((row) => {
             const [hours, minutes] = (row.querySelector(".event-time").value || "06:30")
                 .split(":")
                 .map((part) => parseInt(part, 10) || 0);
+            const region = row.querySelector(".event-region").value.trim();
             return {
                 name: row.querySelector(".event-name").value.trim(),
                 day: parseInt(row.querySelector(".event-day").value, 10) || 0,
                 minute: hours * 60 + minutes,
                 description: row.querySelector(".event-description").value.trim(),
                 public: row.querySelector(".event-public input").checked,
+                region,
+                when: region ? row.querySelector(".event-when").value : "",
+                actor: row.querySelector(".event-actor").value.trim(),
             };
         })
         .filter((event) => event.name && event.description);
@@ -1648,6 +2741,9 @@ function applyScenarioConfig(config) {
     // Scalar/text sections: overwrite only when the key is present in the file.
     if (typeof config.scenario === "string") {
         elements.scenario.value = config.scenario;
+    }
+    if (typeof config.opening === "string") {
+        elements.opening.value = config.opening;
     }
     if (typeof config.guidance === "string") {
         elements.guidance.value = config.guidance;
@@ -1704,7 +2800,12 @@ function applyScenarioConfig(config) {
     // so importing a second file no longer wipes the first file's content.
     (Array.isArray(config.time_rules) ? config.time_rules : []).forEach((rule) => {
         if (rule && typeof rule.activity === "string") {
-            makeTimeRuleRow(rule.activity, rule.minutes_min ?? "", rule.minutes_max ?? "");
+            makeTimeRuleRow(
+                rule.activity,
+                rule.minutes_min ?? "",
+                rule.minutes_max ?? "",
+                Array.isArray(rule.keys) ? rule.keys : [],
+            );
         }
     });
     (Array.isArray(config.events) ? config.events : []).forEach((event) => {
@@ -1715,6 +2816,9 @@ function applyScenarioConfig(config) {
                 time: minutesToTime(event.minute),
                 description: typeof event.description === "string" ? event.description : "",
                 public: Boolean(event.public),
+                region: typeof event.region === "string" ? event.region : "",
+                when: event.when === "time" ? "time" : event.region ? "enter" : "",
+                actor: typeof event.actor === "string" ? event.actor : "",
             });
         }
     });
@@ -1751,15 +2855,60 @@ function applyScenarioConfig(config) {
             elements.samplingRepetitionPenalty.value = config.sampling.repetition_penalty;
         }
     }
+    const truthPlugin = (Array.isArray(config.plugins) ? config.plugins : []).find(
+        (plugin) => plugin && plugin.type === "possible_truths",
+    );
+    if (truthPlugin) {
+        const pluginConfig =
+            truthPlugin.config && typeof truthPlugin.config === "object" ? truthPlugin.config : {};
+        const enabled = truthPlugin.enabled !== false;
+        elements.truthPluginEnabled.checked = enabled;
+        elements.truthPluginFields.hidden = !enabled;
+        if (Number.isFinite(pluginConfig.max_answer_chars)) {
+            elements.truthMaxChars.value = pluginConfig.max_answer_chars;
+        }
+        if (typeof pluginConfig.require_declarative === "boolean") {
+            elements.truthRequireDeclarative.checked = pluginConfig.require_declarative;
+        }
+        if (typeof pluginConfig.feed_dm === "boolean") {
+            elements.truthFeedDm.checked = pluginConfig.feed_dm;
+        }
+        (Array.isArray(pluginConfig.questions) ? pluginConfig.questions : []).forEach(
+            (question) => {
+                if (question && typeof question.text === "string" && question.text.trim()) {
+                    makeTruthQuestionRow(question);
+                }
+            },
+        );
+    }
     if (typeof config.random_turn_order === "boolean") {
         elements.randomTurnOrder.checked = config.random_turn_order;
     }
+    if (typeof config.schedule === "string") {
+        elements.scheduleStrict.checked = config.schedule === "strict";
+    }
+    if (config.world && typeof config.world === "object" && !Array.isArray(config.world)) {
+        if (typeof config.world.start_region === "string") {
+            elements.worldStartRegion.value = config.world.start_region;
+        }
+    }
+    (Array.isArray(config.regions) ? config.regions : []).forEach((region) => {
+        if (region && typeof region.id === "string" && region.name) {
+            makeRegionRow(region);
+        }
+    });
+    (Array.isArray(config.items) ? config.items : []).forEach((item) => {
+        if (item && typeof item.id === "string" && item.name) {
+            makeItemRow(item);
+        }
+    });
 }
 
 function exportScenarioConfig() {
     const { characters, hostCharacter } = collectCharacters();
     const config = {
         scenario: elements.scenario.value,
+        opening: elements.opening.value,
         guidance: elements.guidance.value,
         characters,
         host_character: hostCharacter || "",
@@ -1769,7 +2918,10 @@ function exportScenarioConfig() {
         lorebook: collectLorebook(),
         prompt_blocks: collectPromptBlocks(),
         sampling: collectSampling(),
+        plugins: collectPlugins(),
         random_turn_order: elements.randomTurnOrder.checked,
+        schedule: elements.scheduleStrict.checked ? "strict" : "round",
+        ...collectWorld(),
     };
     const blob = new Blob([JSON.stringify(config, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -1868,13 +3020,14 @@ elements.scenarioForm.addEventListener("submit", (event) => {
     }
     const timeConfig = collectTimeConfig();
     const events = collectEvents();
-    if (events.length && !timeConfig.enabled) {
+    if (events.some((event) => !event.region) && !timeConfig.enabled) {
         elements.hostStatus.textContent = "定时事件需要启用游戏内时钟。";
         return;
     }
     if (
         send("scenario_init", {
             scenario: elements.scenario.value.trim(),
+            opening: elements.opening.value.trim(),
             guidance: elements.guidance.value.trim(),
             characters,
             host_character: hostCharacter || "",
@@ -1884,7 +3037,10 @@ elements.scenarioForm.addEventListener("submit", (event) => {
             lorebook: collectLorebook(),
             prompt_blocks: collectPromptBlocks(),
             sampling: collectSampling(),
+            plugins: collectPlugins(),
             random_turn_order: elements.randomTurnOrder.checked,
+            schedule: elements.scheduleStrict.checked ? "strict" : "round",
+            ...collectWorld(),
         })
     ) {
         elements.scenarioSubmit.disabled = true;
@@ -1954,6 +3110,7 @@ elements.actionForm.addEventListener("submit", (event) => {
     if (action && !elements.actionInput.disabled && send("action", { action })) {
         elements.actionInput.value = "";
         elements.actionInput.disabled = true;
+        elements.holdButton.hidden = true;
     }
 });
 
@@ -1966,6 +3123,8 @@ elements.skipVoteButton.addEventListener("click", () => {
         elements.skipVoteButton.disabled = true;
     }
 });
+
+elements.holdButton.addEventListener("click", holdTurn);
 
 makeCharacterRow();
 makeCharacterRow();

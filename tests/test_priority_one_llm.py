@@ -153,6 +153,61 @@ def test_structured_outputs_default_uses_beta_parse():
     asyncio.run(run())
 
 
+def test_resolution_prompt_separates_shared_scene_from_player_outcomes():
+    """The round prompt forbids repeating player outcomes in the shared narrative."""
+    settings.llm.provider = "openai"
+    settings.llm.structured_outputs = True
+    client = FakeClient()
+    manager = LLMContextManager(client)
+
+    async def run():
+        await manager.generate_resolution({"Alice": "waits", "Bob": "listens"})
+        prompt = client.calls[0]["messages"][-1]["content"]
+        assert "two separate fields with no overlap" in prompt
+        assert "Do not restate, summarize, paraphrase" in prompt
+        assert "Include affected characters' physical condition" not in prompt
+        assert "describe its relevant continuing state" not in prompt
+
+    asyncio.run(run())
+
+
+def test_opening_prompt_ends_with_each_character_activity():
+    """The opening must close by stating what every cast member is doing."""
+    settings.llm.provider = "openai"
+    settings.llm.structured_outputs = True
+    client = FakeClient()
+    manager = LLMContextManager(client)
+
+    async def run():
+        await manager.generate_start_state([], {}, current_time="")
+        prompt = client.calls[0]["messages"][-1]["content"]
+        assert "what every supplied character is doing right now" in prompt
+        assert "last thing in global_narrative" in prompt
+
+    asyncio.run(run())
+
+
+def test_fixed_opening_is_seeded_into_context():
+    """A host fixed opening is seeded into the immutable context, never rewritten."""
+    settings.llm.provider = "openai"
+    settings.llm.structured_outputs = True
+    client = FakeClient()
+    manager = LLMContextManager(client)
+    manager.set_opening("固定开场：三人在档案室碰面。")
+
+    async def run():
+        messages = manager._fixed_messages("round")
+        assert any("固定开场：三人在档案室碰面。" in item["content"] for item in messages)
+        assert any("never rewrite" in item["content"] for item in messages)
+        manager.set_opening("")
+        assert all(
+            "固定开场：三人在档案室碰面。" not in item["content"]
+            for item in manager._fixed_messages("round")
+        )
+
+    asyncio.run(run())
+
+
 def test_dice_planner_prompt_requires_rolls_for_contested_and_repeated_attempts():
     """Contested and repeated attempts are prompted to roll for a definitive outcome."""
     settings.llm.provider = "openai"

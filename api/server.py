@@ -98,8 +98,10 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
 
     @application.get("/", response_class=HTMLResponse)
     async def get_index(request: Request) -> HTMLResponse:
-        """Serve the main HTML page."""
-        return templates.TemplateResponse(request=request, name="index.html")
+        """Serve the main HTML page, never cached so it matches the versioned scripts."""
+        response = templates.TemplateResponse(request=request, name="index.html")
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
+        return response
 
     @application.get("/admin/rooms", response_class=HTMLResponse)
     async def admin_rooms(request: Request) -> HTMLResponse:

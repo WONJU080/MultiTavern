@@ -32,6 +32,8 @@ class LLMConfig(BaseModel):
     round_output_tokens: int = Field(default=2_048, ge=64)
     dice_output_tokens: int = Field(default=512, ge=64)
     summary_output_tokens: int = Field(default=1_024, ge=64)
+    truth_output_tokens: int = Field(default=256, ge=64)
+    review_output_tokens: int = Field(default=512, ge=64)
     token_safety_margin: int = Field(default=256, ge=64)
     request_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
     max_retries: int = Field(default=1, ge=0, le=3)

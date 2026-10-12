@@ -424,3 +424,31 @@ test("reconnect tokens are remembered per room", async () => {
     assert.equal(tab.runtime.rememberedIdentity("arxs", "ABC-123").clientId, clientId);
     assert.equal(tab.runtime.rememberedIdentity("arxs", "ZZZ-999").reconnectToken, "private-token");
 });
+
+test("a host who learns their claimed character reconnects with it", async () => {
+    const tab = browser();
+    tab.sockets[0].open();
+    await tab.login();
+    await tab.pick();
+    // Host auth happens before the host has picked a character, so character is null.
+    tab.sockets[0].receive("auth_ok", {
+        name: "Arxs", character: null, reconnect_token: "tok", is_host: true,
+        state: "AWAITING_PLAYERS", invite_code: "ABC-123",
+        players: [{ name: "Arxs", character: null, connected: true, is_host: true }],
+        player_order: [], characters: [],
+    });
+    // Once the scenario is ready the client learns the host's claimed character.
+    tab.sockets[0].receive("scenario_ready", {
+        title: "夜案",
+        characters: [{ name: "金元珠", description: "", claimed_by: "Arxs", connected: true }],
+    });
+    const saved = JSON.parse(tab.sessionStorage.getItem("artificialDungeonAuth"));
+    assert.equal(saved.character, "金元珠");
+
+    tab.sockets[0].close();
+    const next = tab.reconnect();
+    next.open();
+    assert.equal(next.sent[0].event_type, "join_room");
+    assert.equal(next.sent[0].data.character, "金元珠");
+});
+

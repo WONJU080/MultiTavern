@@ -5,7 +5,15 @@ from pathlib import Path
 
 import pytest
 
-from core.schemas import ClientPayload, DicePlan, RoundResolution, ServerEvent
+from core.schemas import (
+    ActionReview,
+    ActionTruthFindings,
+    ClientPayload,
+    DicePlan,
+    RoundResolution,
+    ServerEvent,
+    TruthVerdict,
+)
 from logic.engine import GameEngine, GameState, IDLE_ACTION
 from logic.transcript import GameTranscript
 
@@ -42,6 +50,14 @@ class FakeResolver:
         self.scenario = ""
         self.rounds = 0
         self.start_names = []
+        self.truth_calls: list[tuple[str, str, bool]] = []
+        self.truth_results: list[object] = []
+        self.truth_findings: list[list] = []
+        self.truth_extractions: list[tuple[list, dict]] = []
+        self.review_results: list[object] = []
+        self.action_reviews: list[tuple[str, str]] = []
+        self.review_obligations: list[list] = []
+        self.region_updates: dict[str, str] = {}
 
     def set_genesis(
         self, scenario: str, guidance: str = "", time_context: str | None = None
@@ -65,6 +81,10 @@ class FakeResolver:
     def set_sampling(self, config) -> None:
         """Record the sampling overrides."""
         self.sampling = config
+
+    def set_opening(self, narrative) -> None:
+        """Record the fixed opening narrative."""
+        self.fixed_opening = narrative
 
     async def generate_scenario_title(self) -> str:
         """Return only a fixed title."""
@@ -93,7 +113,47 @@ class FakeResolver:
                 name: f"Resolved: {action}" for name, action in round_buffer.items()
             },
             time_elapsed_minutes=30,
+            region_updates=dict(self.region_updates),
         )
+
+    async def evaluate_truth(
+        self, question: str, answer: str, require_declarative: bool = True
+    ) -> TruthVerdict:
+        """Return the queued verdict, or accept the submission."""
+        self.truth_calls.append((question, answer, require_declarative))
+        if self.truth_results:
+            result = self.truth_results.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+        return TruthVerdict(valid=True, reason="ok")
+
+    async def extract_truth_answers(self, questions, actions):
+        """Return the next queued batch of action-embedded answers."""
+        self.truth_extractions.append((list(questions), dict(actions)))
+        findings = self.truth_findings.pop(0) if self.truth_findings else []
+        return ActionTruthFindings(findings=list(findings))
+
+    async def review_action(
+        self,
+        character,
+        action,
+        *,
+        roster=None,
+        world_context="",
+        time_rules=None,
+        obligations=None,
+        plans=None,
+    ):
+        """Return the next queued review verdict, or accept the action."""
+        self.action_reviews.append((character, action))
+        self.review_obligations.append(list(obligations or []))
+        if self.review_results:
+            result = self.review_results.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+        return ActionReview(valid=True, reason="")
 
 
 def payload(event_type: str, **data: object) -> ClientPayload:

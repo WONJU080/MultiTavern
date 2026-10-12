@@ -12,8 +12,12 @@ from core.config import settings
 from core.schemas import (
     Character,
     ClientPayload,
+    Item,
     LorebookEntry,
     PromptBlock,
+    Region,
+    RegionLink,
+    RoundResolution,
     SamplingConfig,
     ServerEvent,
     TimeConfig,
@@ -22,6 +26,7 @@ from core.schemas import (
 )
 from logic.game_clock import GameClock
 from logic.models import GameState, Player
+from logic.plugins import parse_plugins
 from logic.validation import clean_optional_text, clean_text
 
 if TYPE_CHECKING:
@@ -110,11 +115,32 @@ def parse_time_rules(value: object) -> list[TimeRule]:
         if not isinstance(entry, dict):
             raise ValueError("每条耗时规则必须是含 'activity' 的对象")
         activity = clean_text(entry.get("activity"), "time rule activity", 80)
+        keys_raw = entry.get("keys", [])
+        if not isinstance(keys_raw, list):
+            raise ValueError(f"耗时规则 '{activity}': 'keys' 必须是字符串列表")
+        if len(keys_raw) > 20:
+            raise ValueError(f"耗时规则 '{activity}': 最多允许 20 个关键词")
+        keys: list[str] = []
+        seen_keys: set[str] = set()
+        for key in keys_raw:
+            cleaned_key = clean_text(key, "time rule key", 20)
+            folded_key = cleaned_key.casefold()
+            if folded_key in seen_keys:
+                raise ValueError(f"耗时规则 '{activity}': 关键词不能重复")
+            seen_keys.add(folded_key)
+            keys.append(cleaned_key)
         minimum = _bounded_int(entry.get("minutes_min"), "minutes_min", 0, 525_600)
         maximum = _bounded_int(entry.get("minutes_max"), "minutes_max", 60, 525_600)
         if minimum > maximum:
             raise ValueError(f"耗时规则 '{activity}': minutes_min 不能大于 minutes_max")
-        rules.append(TimeRule(activity=activity, minutes_min=minimum, minutes_max=maximum))
+        rules.append(
+            TimeRule(
+                activity=activity,
+                keys=keys,
+                minutes_min=minimum,
+                minutes_max=maximum,
+            )
+        )
     return rules
 
 
@@ -162,6 +188,14 @@ def parse_events(value: object) -> list[TimedEvent]:
         seen.add(folded)
         if not isinstance(entry.get("public", False), bool):
             raise ValueError(f"事件 '{name}': 'public' 必须是布尔值")
+        if not isinstance(entry.get("once", True), bool):
+            raise ValueError(f"事件 '{name}': 'once' 必须是布尔值")
+        region = clean_optional_text(entry.get("region"), "event region", 64)
+        when = clean_optional_text(entry.get("when"), "event when", 16)
+        if region and when not in ("enter", "time"):
+            raise ValueError(f"事件 '{name}': 地区事件的 when 必须是 'enter' 或 'time'")
+        if not region and when:
+            raise ValueError(f"事件 '{name}': 时间事件不应带 'when'")
         events.append(
             TimedEvent(
                 name=name,
@@ -169,9 +203,103 @@ def parse_events(value: object) -> list[TimedEvent]:
                 minute=_bounded_int(entry.get("minute"), "event minute", 0, 1439),
                 description=clean_text(entry.get("description"), "event description", 10_000),
                 public=bool(entry.get("public", False)),
+                region=region,
+                when=when,
+                once=bool(entry.get("once", True)),
+                actor=clean_optional_text(entry.get("actor"), "event actor", 80),
             )
         )
     return events
+
+
+def parse_regions(value: object) -> list[Region]:
+    """Validate the host-supplied region graph."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("'regions' 必须是地区对象列表")
+    if len(value) > 200:
+        raise ValueError("最多允许 200 个地区")
+    regions: list[Region] = []
+    seen: set[str] = set()
+    for entry in value:
+        if not isinstance(entry, dict):
+            raise ValueError("每个地区必须是含 'id' 与 'name' 的对象")
+        region_id = clean_text(entry.get("id"), "region id", 64)
+        folded = region_id.casefold()
+        if folded in seen:
+            raise ValueError("地区 id 不能重复。")
+        seen.add(folded)
+        items_raw = entry.get("items", [])
+        if not isinstance(items_raw, list) or len(items_raw) > 200:
+            raise ValueError(f"地区 '{region_id}': 'items' 必须是列表（≤200）")
+        items = [clean_text(item, "region item id", 64) for item in items_raw]
+        links_raw = entry.get("links", [])
+        if not isinstance(links_raw, list) or len(links_raw) > 50:
+            raise ValueError(f"地区 '{region_id}': 'links' 必须是列表（≤50）")
+        links: list[RegionLink] = []
+        for link_entry in links_raw:
+            if not isinstance(link_entry, dict):
+                raise ValueError(f"地区 '{region_id}': 每个连接必须是含 'to' 的对象")
+            to = clean_text(link_entry.get("to"), "link to", 64)
+            requires = clean_optional_text(link_entry.get("requires"), "link requires", 500)
+            requires_item = clean_optional_text(
+                link_entry.get("requires_item"), "link requires_item", 64
+            )
+            links.append(RegionLink(to=to, requires=requires, requires_item=requires_item))
+        if not isinstance(entry.get("private", False), bool):
+            raise ValueError(f"地区 '{region_id}': 'private' 必须是布尔值")
+        regions.append(
+            Region(
+                id=region_id,
+                name=clean_text(entry.get("name"), "region name", 80),
+                arrival_text=clean_optional_text(entry.get("arrival_text"), "arrival text", 10_000),
+                items=items,
+                links=links,
+                private=bool(entry.get("private", False)),
+            )
+        )
+    return regions
+
+
+def parse_items(value: object) -> list[Item]:
+    """Validate the host-supplied item definitions."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("'items' 必须是物品对象列表")
+    if len(value) > 500:
+        raise ValueError("最多允许 500 件物品")
+    items: list[Item] = []
+    seen: set[str] = set()
+    for entry in value:
+        if not isinstance(entry, dict):
+            raise ValueError("每件物品必须是含 'id' 与 'name' 的对象")
+        item_id = clean_text(entry.get("id"), "item id", 64)
+        folded = item_id.casefold()
+        if folded in seen:
+            raise ValueError("物品 id 不能重复。")
+        seen.add(folded)
+        for flag in ("clue", "key_item", "backstage", "carryable"):
+            default = True if flag == "carryable" else False
+            if not isinstance(entry.get(flag, default), bool):
+                raise ValueError(f"物品 '{item_id}': '{flag}' 必须是布尔值")
+        items.append(
+            Item(
+                id=item_id,
+                name=clean_text(entry.get("name"), "item name", 80),
+                region=clean_optional_text(entry.get("region"), "item region", 64),
+                summary=clean_optional_text(entry.get("summary"), "item summary", 2_000),
+                investigate_text=clean_optional_text(
+                    entry.get("investigate_text"), "investigate text", 10_000
+                ),
+                clue=bool(entry.get("clue", False)),
+                key_item=bool(entry.get("key_item", False)),
+                backstage=bool(entry.get("backstage", False)),
+                carryable=bool(entry.get("carryable", True)),
+            )
+        )
+    return items
 
 
 def parse_lorebook(value: object) -> list[LorebookEntry]:
@@ -296,16 +424,21 @@ class LobbyMixin:
         except ValueError as exc:
             LOGGER.info("Client event rejected event=%s reason=%s", payload.event_type, exc)
             await self._send_error(client_id, str(exc))
-            if payload.event_type == "action":
+            if payload.event_type in ("action", "hold"):
                 async with self.effects_lock:
                     async with self.lock:
-                        directive = (
-                            self._next_turn_locked()
-                            if authorize() and self.active_player_id == client_id
-                            else None
-                        )
+                        directive = None
+                        window_event = None
+                        if authorize() and self.state is GameState.ACTIVE_TURN:
+                            if self.schedule_mode == "strict":
+                                if client_id in self.window:
+                                    window_event = self._window_events_locked()[0]
+                            elif self.active_player_id == client_id:
+                                directive = self._next_turn_locked()
                     if directive is not None:
                         await self.sender.send_personal(client_id, directive)
+                    if window_event is not None:
+                        await self.sender.send_personal(client_id, window_event)
         finally:
             CURRENT_OWNER.reset(token)
 
@@ -523,7 +656,12 @@ class LobbyMixin:
                     else:
                         self.pending_players[client_id] = player
             active = self.players.get(self.active_player_id) if self.active_player_id else None
-            if self.state is GameState.ACTIVE_TURN and (active is None or not active.is_connected):
+            if self.state is GameState.ACTIVE_TURN and self.schedule_mode == "strict":
+                if player.character_name is not None and client_id not in self.inflight:
+                    self.window.add(client_id)
+            elif self.state is GameState.ACTIVE_TURN and (
+                active is None or not active.is_connected
+            ):
                 directive = self._next_turn_locked()
                 actions = self._take_complete_round_locked()
                 if actions is not None:
@@ -619,18 +757,61 @@ class LobbyMixin:
         """Accept the host's scenario, cast of characters and optional own claim."""
         scenario = clean_text(data.get("scenario"), "scenario", 500_000)
         guidance = clean_optional_text(data.get("guidance"), "guidance", 500_000)
+        opening = clean_optional_text(data.get("opening"), "opening", 500_000)
         cast = parse_cast(data.get("characters"))
         time_config = parse_time_config(data.get("time_config"))
         time_rules = parse_time_rules(data.get("time_rules"))
         events = parse_events(data.get("events"))
-        if events and not time_config.enabled:
+        if (
+            any(not event.region or event.when == "time" for event in events)
+            and not time_config.enabled
+        ):
             raise ValueError("定时事件需要先启用游戏内时钟。")
+        regions = parse_regions(data.get("regions"))
+        items = parse_items(data.get("items"))
+        world = data.get("world")
+        start_region = ""
+        if world is not None:
+            if not isinstance(world, dict):
+                raise ValueError("'world' 必须是对象")
+            start_region = clean_optional_text(world.get("start_region"), "start_region", 64)
+        if regions:
+            region_ids = {region.id for region in regions}
+            item_ids = {item.id for item in items}
+            if not start_region:
+                start_region = regions[0].id
+            if start_region not in region_ids:
+                raise ValueError("world.start_region 不在 regions 中。")
+            for region in regions:
+                for item_id in region.items:
+                    if item_id not in item_ids:
+                        raise ValueError(f"地区 '{region.id}' 引用了不存在的物品 '{item_id}'。")
+                for link in region.links:
+                    if link.to not in region_ids:
+                        raise ValueError(f"地区 '{region.id}' 连接指向不存在的地区 '{link.to}'。")
+                    if link.requires_item and link.requires_item not in item_ids:
+                        raise ValueError(f"地区 '{region.id}' 的连接要求不存在的物品。")
+            for event in events:
+                if event.region and event.region not in region_ids:
+                    raise ValueError(f"事件 '{event.name}' 引用了不存在的地区 '{event.region}'。")
+        elif start_region:
+            raise ValueError("'world' 需要同时提供 'regions'。")
         lorebook = parse_lorebook(data.get("lorebook"))
         prompt_blocks = parse_prompt_blocks(data.get("prompt_blocks"))
         sampling = parse_sampling(data.get("sampling"))
+        plugins = parse_plugins(data.get("plugins"))
         random_turn_order = data.get("random_turn_order", True)
         if not isinstance(random_turn_order, bool):
             raise ValueError("'random_turn_order' 必须是布尔值")
+        schedule = data.get("schedule")
+        if schedule is None:
+            schedule = "strict" if regions else "round"
+        if schedule not in ("round", "strict"):
+            raise ValueError("'schedule' 必须是 'round' 或 'strict'")
+        if schedule == "round" and regions:
+            raise ValueError("地区系统需要 schedule='strict'。")
+        if schedule == "strict" and not time_config.enabled:
+            raise ValueError("严格时间轴调度需要先启用游戏内时钟。")
         host_character = clean_optional_text(data.get("host_character"), "host_character", 40)
         if host_character:
             claimed = next(
@@ -649,6 +830,7 @@ class LobbyMixin:
                 raise ValueError("当前状态下无法修改剧情。")
             previous_claims = dict(self.claims)
             self.cast = cast
+            self.fixed_opening = opening
             self.timed_events = events
             self.fired_events = set()
             self.event_log = []
@@ -656,7 +838,21 @@ class LobbyMixin:
             self.lorebook = lorebook
             self.prompt_blocks = prompt_blocks
             self.sampling = sampling
+            self.plugins = plugins
+            self.truth_revealed = set()
+            self.truth_answers = {}
+            self.truth_used_round = {}
+            self.truth_pending = set()
             self.random_turn_order = random_turn_order
+            self.schedule_mode = schedule
+            self.regions = {region.id: region for region in regions}
+            self.items = {item.id: item for item in items}
+            self.world_start_region = start_region
+            self.region_of = {}
+            self.visited_regions = set()
+            self.region_flags = set()
+            self.item_location = {item.id: item.region for item in items if item.region}
+            self.investigated_items = set()
             new_names = {char.name for char in cast}
             # Editing before the start keeps claims that still exist and releases
             # the rest; the host's own claim is reassigned explicitly below.
@@ -776,9 +972,16 @@ class LobbyMixin:
         self: "GameEngine", epoch: int, cast: list[Character], claims: dict[str, str]
     ) -> None:
         """Introduce the cast and transition the game to its active turn."""
-        resolution = await self.resolver.generate_start_state(
-            cast, claims, current_time=self._authoritative_time_label()
-        )
+        if self.fixed_opening:
+            opening_text = self.fixed_opening
+            set_opening = getattr(self.resolver, "set_opening", None)
+            if set_opening is not None:
+                set_opening(opening_text)
+            resolution = RoundResolution(global_narrative=opening_text, player_resolutions={})
+        else:
+            resolution = await self.resolver.generate_start_state(
+                cast, claims, current_time=self._authoritative_time_label()
+            )
         async with self.effects_lock:
             async with self.lock:
                 if not self._job_current(epoch):
@@ -795,8 +998,19 @@ class LobbyMixin:
                 self.current_scenario_state = resolution.global_narrative
                 self.opening_scenario = resolution.global_narrative
                 self.state = GameState.ACTIVE_TURN
-                self._shuffle_turn_queue_locked()
-                directive = self._next_turn_locked()
+                directive = None
+                window_events: list[ServerEvent] = []
+                if self.regions:
+                    self.visited_regions.add(self.world_start_region)
+                    for member in self.players.values():
+                        if member.character_name is not None:
+                            self.region_of[member.character_name] = self.world_start_region
+                if self.schedule_mode == "strict":
+                    window_events = self._open_window_locked()
+                else:
+                    self._shuffle_turn_queue_locked()
+                    directive = self._next_turn_locked()
+                truth_reveals = self._refresh_truth_reveals_locked()
             payload = resolution.model_dump()
             payload.update(
                 round_title=self.scenario_title,
@@ -807,11 +1021,16 @@ class LobbyMixin:
             await self.sender.broadcast_global(
                 ServerEvent(type="system_msg", payload={"msg": "游戏已开始。"})
             )
-            await self.sender.broadcast_global(
-                ServerEvent(type="round_start", payload={"round_number": 1})
-            )
+            if window_events:
+                for event in window_events:
+                    await self.sender.broadcast_global(event)
+            else:
+                await self.sender.broadcast_global(
+                    ServerEvent(type="round_start", payload={"round_number": 1})
+                )
             if directive is not None:
                 await self.sender.broadcast_global(directive)
+            await self._announce_truth_reveals(truth_reveals)
             LOGGER.info("Game started characters=%d claimed=%d", len(cast), len(claims))
 
     async def _end_game(self: "GameEngine", client_id: str, data: dict[str, object]) -> None:
@@ -913,6 +1132,14 @@ class LobbyMixin:
             "character": player.character_name,
             "is_host": player.is_host,
             "state": self.state.name,
+            "schedule_mode": self.schedule_mode,
+            "has_map": bool(self.regions),
+            "has_codex": bool(self.items or self.timed_events),
+            "schedule": (
+                self._window_events_locked()[0].payload
+                if self.schedule_mode == "strict" and self.state is GameState.ACTIVE_TURN
+                else None
+            ),
             "game_time": self._authoritative_time_label(),
             "round_history": list(self.round_history),
             "scenario_title": self.scenario_title,
@@ -931,6 +1158,17 @@ class LobbyMixin:
                 else None
             ),
             "submitted_actions": self._submitted_actions_locked(),
+            "truth": self._truth_state_payload_locked(player),
+            "pending_proposals": [
+                {"from": proposal["from"], "content": proposal["content"]}
+                for proposal in self.pending_proposals
+                if proposal["to"] == player.character_name and not proposal["resolved"]
+            ],
+            "agreed_plans": [
+                {"id": plan["id"], "content": plan["content"], "status": plan["status"]}
+                for plan in self.agreed_plans
+                if player.character_name in plan["participants"] and plan["status"] != "done"
+            ],
             "player_order": [
                 (self.players[item].character_name or self.players[item].name)
                 for item in self.join_order

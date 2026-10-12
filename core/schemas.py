@@ -29,6 +29,11 @@ class ClientPayload(StrictModel):
         "history_request",
         "character_update",
         "provide_key",
+        "truth_submit",
+        "truth_request",
+        "hold",
+        "map_request",
+        "codex_request",
     ]
     data: dict[str, Any]
 
@@ -56,6 +61,14 @@ class ServerEvent(StrictModel):
         "token_usage",
         "history_chunk",
         "key_updated",
+        "truth_state",
+        "truth_question",
+        "truth_answer",
+        "truth_result",
+        "turn_window",
+        "map_state",
+        "scene_text",
+        "codex_state",
     ]
     payload: dict[str, Any]
 
@@ -93,12 +106,14 @@ class RoundResolution(StrictModel):
     global_narrative: str
     player_resolutions: dict[str, str]
     time_elapsed_minutes: int | None = Field(default=None, ge=0)
+    region_updates: dict[str, str] = Field(default_factory=dict)
 
 
 class TimeRule(StrictModel):
     """A reference duration for one kind of in-world activity."""
 
     activity: str
+    keys: list[str] = Field(default_factory=list)
     minutes_min: int = Field(default=0, ge=0)
     minutes_max: int = Field(default=60, ge=0)
 
@@ -114,13 +129,50 @@ class TimeConfig(StrictModel):
 
 
 class TimedEvent(StrictModel):
-    """A scheduled story event that fires at a fixed in-game time."""
+    """A story event scheduled by in-game time or by entering a region."""
 
     name: str
     day: int = Field(default=0, ge=0)
     minute: int = Field(default=0, ge=0, lt=1440)
     description: str
     public: bool = False
+    region: str = ""
+    when: str = ""
+    once: bool = True
+    actor: str = ""
+
+
+class RegionLink(StrictModel):
+    """A reachable neighbour of one region, with an optional travel requirement."""
+
+    to: str
+    requires: str = ""
+    requires_item: str = ""
+
+
+class Region(StrictModel):
+    """A place in the world graph."""
+
+    id: str
+    name: str
+    arrival_text: str = ""
+    items: list[str] = Field(default_factory=list)
+    links: list[RegionLink] = Field(default_factory=list)
+    private: bool = False
+
+
+class Item(StrictModel):
+    """A host-defined object that can be investigated or carried."""
+
+    id: str
+    name: str
+    region: str = ""
+    summary: str = ""
+    investigate_text: str = ""
+    clue: bool = False
+    key_item: bool = False
+    backstage: bool = False
+    carryable: bool = True
 
 
 class LorebookEntry(StrictModel):
@@ -173,6 +225,76 @@ class SamplingConfig(StrictModel):
     top_k: int | None = Field(default=None, ge=0, le=1_000_000)
     min_p: float | None = Field(default=None, ge=0, le=1)
     repetition_penalty: float | None = Field(default=None, ge=0, le=5)
+
+
+class TruthQuestion(StrictModel):
+    """One host-authored prompt in the possible-truths plugin."""
+
+    id: str
+    text: str
+    condition: Literal["start", "event", "time", "round"] = "start"
+    event_name: str = ""
+    day: int = Field(default=0, ge=0)
+    minute: int = Field(default=0, ge=0, lt=1440)
+    round_number: int = Field(default=0, ge=0)
+
+
+class PossibleTruthsConfig(StrictModel):
+    """Host configuration for the possible-truths plugin."""
+
+    questions: list[TruthQuestion] = Field(default_factory=list)
+    max_answer_chars: int = Field(default=500, ge=1, le=10_000)
+    require_declarative: bool = True
+    feed_dm: bool = True
+
+
+class RoomPlugin(StrictModel):
+    """A per-room plugin slot; ``possible_truths`` is the supported type."""
+
+    type: Literal["possible_truths"]
+    enabled: bool = True
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class TruthVerdict(StrictModel):
+    """LLM judgement of one player truth submission."""
+
+    valid: bool
+    reason: str = ""
+
+
+class ActionTruthFinding(StrictModel):
+    """One player action that verbatim answers a revealed truth question."""
+
+    question_id: str
+    character: str
+    quote: str = ""
+
+
+class ActionTruthFindings(StrictModel):
+    """Batch of action-embedded answers detected by the referee."""
+
+    findings: list[ActionTruthFinding] = Field(default_factory=list)
+
+
+class ActionReview(StrictModel):
+    """Referee judgement plus scheduling hints for one player action."""
+
+    valid: bool
+    reason: str = ""
+    kind: Literal["self", "target_other", "proposal", "response", "hold"] = "self"
+    targets: list[str] = Field(default_factory=list)
+    proposal_to: str | None = None
+    response_to: str | None = None
+    response: Literal["agree", "ignore", "refuse"] | None = None
+    matched_rule: str | None = None
+    duration_minutes: int | None = Field(default=None, ge=0)
+    instant_comm: bool = True
+    referenced_item: str | None = None
+    referenced_region: str | None = None
+    plan_id: str | None = None
+    move_to: str | None = None
+    take_item: str | None = None
 
 
 class ScenarioTitle(StrictModel):

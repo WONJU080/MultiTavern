@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Anyworld</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=22">
+  <link rel="stylesheet" href="/static/css/style.css?v=30">
   <link rel="icon" type="image/png" href="/static/favicon/favicon-96x96.png" sizes="96x96" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon/favicon.svg" />
   <link rel="shortcut icon" href="/static/favicon/favicon.ico" />
@@ -50,6 +50,8 @@
         <span id="skip-vote-status" aria-live="polite"></span>
         <button type="button" id="skip-vote-button">投票跳过</button>
       </div>
+      <div id="schedule-status" hidden aria-live="polite"></div>
+      <button type="button" id="hold-button" hidden>观望</button>
       <input type="text" id="action-input" maxlength="50000" disabled autocomplete="off"
         placeholder="等待轮到你…" aria-label="Your character action">
     </form>
@@ -119,8 +121,12 @@
           <div id="character-editor"></div>
           <button type="button" id="add-character">+ 添加角色</button>
           <label class="check-label"><input type="checkbox" id="random-turn-order" checked> 每轮随机打乱行动顺序</label>
+          <label class="check-label"><input type="checkbox" id="schedule-strict"> 启用逐行动时间轴（严格调度，需同时启用游戏内时钟）</label>
           <label for="scenario-input">描述世界观、角色与开场情境</label>
           <textarea id="scenario-input" maxlength="500000" required></textarea>
+          <label for="opening-input">固定开场白（可选；填写后原样作为开场展示，不再由 AI 生成）</label>
+          <textarea id="opening-input" maxlength="500000"
+            placeholder="例：雨停之前，三人在旧档案室碰面——甲在核对尸检记录，乙靠在窗边听码头动静，丙摊开一沓旧报纸。"></textarea>
           <label for="guidance-input">主持私密指引（可选）</label>
           <textarea id="guidance-input" maxlength="500000"
             placeholder="例：每当玩家行动时，保留一点极小概率发生极度随机事件的可能。"></textarea>
@@ -146,8 +152,8 @@
             </div>
           </details>
           <details class="config-section">
-            <summary>定时事件（可选，需启用时钟）</summary>
-            <p class="config-hint">每个事件在时钟到达指定时刻时，对所有在线玩家同时触发一次。</p>
+            <summary>事件（可选）：全局定时，或按地区触发</summary>
+            <p class="config-hint">填写「地区id」即按地区触发（进入地区 / 该地区到点），无需启用时钟；留空则为全局定时事件（需启用时钟）。</p>
             <div id="events-editor"></div>
             <button type="button" id="add-event">+ 添加事件</button>
           </details>
@@ -183,6 +189,36 @@
             <p class="config-hint">位置说明：system＝核心系统提示之后 · scenario＝剧情/指引之后 · output＝生成之前 · history＝插入最近对话（role/depth 生效，depth 0 紧贴当前回合）。</p>
             <div id="prompt-blocks-editor"></div>
             <button type="button" id="add-prompt-block">+ 添加提示块</button>
+          </details>
+          <details class="config-section">
+            <summary>可能的真相（插件，可选）</summary>
+            <p class="config-hint">揭晓后的提问对所有玩家可见；每名玩家每回合可提交一次真相，经 AI 裁定采纳后公开署名，并作为下一回合的参考素材。</p>
+            <label class="check-label"><input type="checkbox" id="truth-plugin-enabled"> 启用「可能的真相」</label>
+            <div id="truth-plugin-fields" hidden>
+              <div class="field-row">
+                <label for="truth-max-chars">答案字数上限</label>
+                <input id="truth-max-chars" type="number" min="1" max="10000" value="500">
+                <label class="check-label"><input type="checkbox" id="truth-require-declarative" checked>
+                  要求陈述句</label>
+                <label class="check-label"><input type="checkbox" id="truth-feed-dm" checked>
+                  采纳后供 AI 参考</label>
+              </div>
+              <p class="config-hint">每个提问的出现条件：开团即出现 / 事件触发后 / 游戏内时刻 / 第 N 回合到来时。</p>
+              <div id="truth-questions-editor"></div>
+              <button type="button" id="add-truth-question">+ 添加提问</button>
+            </div>
+          </details>
+          <details class="config-section">
+            <summary>地区与物品（世界，可选）</summary>
+            <p class="config-hint">填写地区后自动启用逐行动时间轴。连接写法：<code>目标地区</code> 或 <code>目标地区&gt;需要的物品id</code>，逗号分隔。</p>
+            <label for="world-start-region">起始地区 id</label>
+            <input id="world-start-region" maxlength="64" autocomplete="off" placeholder="例如 camp">
+            <p class="config-hint">地区：</p>
+            <div id="regions-editor"></div>
+            <button type="button" id="add-region">+ 添加地区</button>
+            <p class="config-hint">物品：</p>
+            <div id="items-editor"></div>
+            <button type="button" id="add-item">+ 添加物品</button>
           </details>
           <button type="submit" id="scenario-submit">生成剧情</button>
         </form>
@@ -244,9 +280,38 @@
   <button id="retry-round-button" type="button" hidden>重试暂停回合</button>
   <button id="leave-room-button" type="button" hidden>离开房间</button>
   <button id="character-card-button" type="button" hidden>我的角色卡</button>
+  <button id="map-button" type="button" hidden>地图</button>
+  <button id="codex-button" type="button" hidden>物品与事件</button>
+  <button id="truth-button" type="button" hidden>✦ 可能的真相</button>
+  <div id="map-modal" class="modal" role="dialog" aria-modal="true" hidden>
+    <div class="modal-card" id="map-card">
+      <h2>地图</h2>
+      <p class="config-hint">全队共享：已到过的地区、各角色位置与背包、可从当前地区前往的地区、以及该地区内已知的物品（线索会标注）。</p>
+      <div id="map-body"></div>
+      <button type="button" id="map-close" class="secondary">关闭</button>
+    </div>
+  </div>
+  <div id="codex-modal" class="modal" role="dialog" aria-modal="true" hidden>
+    <div class="modal-card" id="codex-card">
+      <h2>物品与事件</h2>
+      <p class="config-hint">已发现的物品（含原本所在地与介绍）与已触发的事件。</p>
+      <div id="codex-body"></div>
+      <button type="button" id="codex-close" class="secondary">关闭</button>
+    </div>
+  </div>
+  <div id="truth-modal" class="modal" role="dialog" aria-modal="true" hidden>
+    <div class="modal-card" id="truth-card">
+      <h2>可能的真相</h2>
+      <p class="config-hint">把你确信的一个真相或片段提交给主持人；通过裁定的真相会公开署名展示，并在下一回合供 AI 参考。</p>
+      <p id="truth-round-status" class="config-hint" role="status"></p>
+      <div id="truth-questions"></div>
+      <p id="truth-error" class="error" role="alert"></p>
+      <button type="button" id="truth-close" class="secondary">关闭</button>
+    </div>
+  </div>
   <button id="mobile-menu-button" type="button" hidden aria-label="Menu">⋯</button>
   <div id="connection-status" role="status">连接中…</div>
-  <script src="/static/js/app.js?v=st-import-23"></script>
+  <script src="/static/js/app.js?v=s4i-36"></script>
 </body>
 
 </html>

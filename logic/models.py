@@ -92,6 +92,10 @@ class ResolutionManager(Protocol):
         """Set optional per-room sampling overrides."""
         ...
 
+    def set_opening(self, narrative: str) -> None:
+        """Record a host-provided fixed opening narrative, or clear it when empty."""
+        ...
+
     async def discover_context_window(self) -> None:
         """Discover the backend context window size."""
         ...
@@ -123,6 +127,32 @@ class ResolutionManager(Protocol):
 
     async def preflight_round(self, actions: dict[str, str], current_state: str = "") -> None:
         """Reject actions that exceed the context budget."""
+        ...
+
+    async def evaluate_truth(
+        self, question: str, answer: str, require_declarative: bool = True
+    ) -> Any:
+        """Judge whether a player's possible-truth submission is valid and on-topic."""
+        ...
+
+    async def extract_truth_answers(
+        self, questions: list[tuple[str, str]], actions: dict[str, str]
+    ) -> Any:
+        """Extract player statements that directly answer revealed questions."""
+        ...
+
+    async def review_action(
+        self,
+        character: str,
+        action: str,
+        *,
+        roster: list[str] | None = None,
+        world_context: str = "",
+        time_rules: list[Any] | None = None,
+        obligations: list[dict[str, str]] | None = None,
+        plans: list[dict[str, Any]] | None = None,
+    ) -> Any:
+        """Classify an action, enforce proposal/response rules and suggest a duration."""
         ...
 
     async def close(self) -> None:
