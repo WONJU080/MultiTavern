@@ -16,3 +16,9 @@ pytest-output.txt
 benchmarks/
 .rooms/
 .DS_Store
+
+# 跑测产物（可能包含剧情卡内容与真实对局记录）
+playtest-runs/
+
+# 剧情卡与预设：属于内容而非代码，默认不入库（需要时用 git add -f 显式添加）
+examples/*.anyworld.json
