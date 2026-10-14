@@ -50,6 +50,58 @@ def test_engine_state_round_trips(tmp_path):
     asyncio.run(run())
 
 
+def test_restore_tolerates_fields_this_version_removed(tmp_path):
+    """A room saved by an older build still loads when a model field is retired.
+
+    Regression: removing ``Region.private`` made every saved room unloadable, because
+    the persisted models forbid extra keys and the registry drops any room that fails
+    to rebuild.
+    """
+
+    async def run():
+        engine, _, _ = await build_engine(tmp_path)
+        await set_scenario(engine, CAST_TWO, "Host")
+        await engine.process_payload("host", payload("start_game"))
+        await engine.wait_for_inference()
+
+        data = engine.to_persistent_dict()
+        # Simulate a save written before the field was removed.
+        data["regions"] = [
+            {
+                "id": "camp",
+                "name": "营地",
+                "arrival_text": "",
+                "items": [],
+                "links": [],
+                "private": False,
+            }
+        ]
+        data["items"] = [
+            {
+                "id": "lantern",
+                "name": "提灯",
+                "region": "camp",
+                "summary": "",
+                "investigate_text": "",
+                "clue": False,
+                "key_item": False,
+                "backstage": False,
+                "carryable": True,
+                "retired_field": "gone",
+            }
+        ]
+        restored = restore_engine(data, FakeSender(), ControlledResolver)
+        # The room survives and the retired keys are simply dropped.
+        assert set(restored.regions) == {"camp"}
+        assert restored.regions["camp"].name == "营地"
+        assert not hasattr(restored.regions["camp"], "private")
+        assert set(restored.items) == {"lantern"}
+        await engine.shutdown()
+        await restored.shutdown()
+
+    asyncio.run(run())
+
+
 def test_registry_persists_and_restores_a_room():
     """Rooms are saved to disk and rebuilt after a simulated restart."""
     settings.server.empty_room_timeout_seconds = None

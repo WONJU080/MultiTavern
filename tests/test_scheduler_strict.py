@@ -242,5 +242,3 @@ def test_strict_records_history_and_transcript(tmp_path: Path) -> None:
         assert "<h2>Round 1</h2>" in content
 
     asyncio.run(run())
-
-

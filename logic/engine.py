@@ -102,6 +102,9 @@ class GameEngine(LobbyMixin):
         self.pending_proposals: list[dict[str, object]] = []
         self.agreed_plans: list[dict[str, object]] = []
         self.plan_counter = 0
+        # Per-character action metadata from the referee, keyed by character name:
+        # {"targets": [...], "kind": "..."}. Consumed by the contested-check guard.
+        self.action_reviews: dict[str, dict[str, object]] = {}
         self.previous_actions: dict[str, str] = {}
         # Strict (per-action) scheduling state.
         self.schedule_mode = "round"
@@ -1063,6 +1066,7 @@ class GameEngine(LobbyMixin):
                         "name": item.name,
                         "summary": item.summary,
                         "clue": item.clue,
+                        "key_item": item.key_item,
                         "carryable": item.carryable,
                         "investigated": investigated,
                         "detail": item.investigate_text if investigated else "",
@@ -1147,6 +1151,7 @@ class GameEngine(LobbyMixin):
                     "name": item.name,
                     "summary": item.summary,
                     "clue": item.clue,
+                    "key_item": item.key_item,
                     "investigated": item.id in self.investigated_items,
                     "detail": item.investigate_text if item.id in self.investigated_items else "",
                     "origin": origin.name if origin is not None else "",
@@ -1161,7 +1166,10 @@ class GameEngine(LobbyMixin):
             events.append(
                 {
                     "name": event.name,
-                    "description": event.description,
+                    # A non-public event keeps its host-authored description backstage:
+                    # players learn only that it happened, and where. The full text stays
+                    # in the transcript and the server logs for the operator.
+                    "description": event.description if event.public else "",
                     "actor": event.actor,
                     "region": region.name if region is not None else "",
                     "public": event.public,
@@ -1233,7 +1241,15 @@ class GameEngine(LobbyMixin):
         completed = tuple(
             cid for cid, entry in self.inflight.items() if int(entry["end"]) <= next_end
         )
-        self.pending_schedule = {"completed": completed, "next_end": next_end}
+        self.pending_schedule = {
+            "completed": completed,
+            "next_end": next_end,
+            # Frozen while the lock is held; read later without it.
+            "action_reviews": self._reviewed_actions_locked(completed),
+        }
+        # Each referee verdict is consumed by exactly one resolution boundary, so a
+        # later window cannot re-assert an earlier round's targeting.
+        self.action_reviews.clear()
         self._launch_job_locked(
             lambda epoch: self._resolve_scheduled(epoch, completed, next_end),
             GameState.AWAITING_LLM,
@@ -1295,13 +1311,6 @@ class GameEngine(LobbyMixin):
                 "Scheduled event fired room=%s event=%s at=%s", self.room_code, event.name, fired_at
             )
         return announcements
-
-    def _region_audience_locked(self, region_id: str) -> set[str] | None:
-        """Return client ids allowed to see a private region's content, or None for all."""
-        region = self.regions.get(region_id)
-        if region is None or not region.private:
-            return None
-        return self._region_occupants_locked(region_id)
 
     def _region_occupants_locked(self, region_id: str) -> set[str]:
         """Return connected client ids whose character is currently inside a region."""
@@ -1427,31 +1436,22 @@ class GameEngine(LobbyMixin):
                     return
                 self.game_clock.add_minutes(max(0, boundary - self._clock_total()))
                 announcements = self._fire_time_events_locked()
+                # Reaching an event can satisfy a truth reveal condition. Strict
+                # games have no round commit here, so the check must live here too.
+                truth_reveals = self._refresh_truth_reveals_locked()
                 self.state = GameState.ACTIVE_TURN
                 # Continue the timeline: another event, a completion, or a window.
                 self._advance_schedule_locked()
                 window_events = (
                     self._window_events_locked() if self.state is GameState.ACTIVE_TURN else []
                 )
-                private_notes = [
-                    (note, self._region_occupants_locked(str(note.get("region") or "")))
-                    for note in announcements
-                    if note.get("region")
-                ]
             for message in announcements:
-                if message.get("region"):
-                    continue
                 await self.sender.broadcast_global(
                     ServerEvent(type="system_msg", payload={"msg": message.get("msg", "")})
                 )
-            for note, audience in private_notes:
-                for cid in audience:
-                    await self.sender.send_personal(
-                        cid,
-                        ServerEvent(type="system_msg", payload={"msg": note.get("msg", "")}),
-                    )
             for event in window_events:
                 await self.sender.broadcast_global(event)
+            await self._announce_truth_reveals(truth_reveals)
             await self._publish_usage()
 
     async def _resolve_scheduled_work(
@@ -1479,6 +1479,8 @@ class GameEngine(LobbyMixin):
                 )
                 llm_actions[name] = str(entry["action"])
             previous_state = self.current_scenario_state or ""
+            schedule = self.pending_schedule or {}
+            reviews = dict(schedule.get("action_reviews") or {})
             inflight_notes = [
                 f"{entry['character']} 正在进行的行动：{entry['action']}"
                 for cid, entry in self.inflight.items()
@@ -1521,6 +1523,10 @@ class GameEngine(LobbyMixin):
                     name for name, required in plan.rolls.items() if required
                 }:
                     raise LLMResolutionError("骰点计划参与者无效。")
+                self._require_contested_checks(
+                    reviews,
+                    {name for name, required in plan.rolls.items() if required},
+                )
                 hidden = set(plan.hidden_rolls)
                 dice = {name: roll_d100() for name, required in plan.rolls.items() if required}
             if plan_dice is None:
@@ -1543,6 +1549,7 @@ class GameEngine(LobbyMixin):
                 or any(not text.strip() for text in resolution.player_resolutions.values())
             ):
                 raise LLMResolutionError("结算参与者无效或全局叙述为空。")
+        truth_reveals: list[TruthQuestion] = []
         async with self.effects_lock:
             async with self.lock:
                 if not self._job_current(epoch):
@@ -1577,13 +1584,9 @@ class GameEngine(LobbyMixin):
                 scene_texts: list[dict] = []
                 for entry in completed_effects:
                     scene_texts.extend(self._apply_world_effects_locked(entry, announcements))
-                action_regions = {
-                    str(entry.get("character")): self.region_of.get(
-                        str(entry.get("character")), self.world_start_region
-                    )
-                    for entry in completed_effects
-                    if entry.get("character")
-                }
+                # The clock moved and world events fired: reveal any truth question
+                # whose condition is now met, exactly as the round path does.
+                truth_reveals = self._refresh_truth_reveals_locked()
                 display_actions = dict(llm_actions)
                 public_dice = {name: value for name, value in dice.items() if name not in hidden}
                 display = None
@@ -1653,45 +1656,12 @@ class GameEngine(LobbyMixin):
                     LOGGER.warning("Could not append round %s to transcript", number)
                 compact_code = self.room_code.replace("-", "") if self.room_code else ""
                 await self.history_store.append(compact_code, history_record)
-            private_present = any(
-                (self.regions.get(region_id) is not None and self.regions[region_id].private)
-                for region_id in action_regions.values()
-            )
-            visible_outcomes = display.player_resolutions if display is not None else {}
-            if private_present and visible_outcomes:
-                for cid, member in list(self.players.items()):
-                    if not member.is_connected:
-                        continue
-                    visible = {}
-                    for name, text in visible_outcomes.items():
-                        region_id = action_regions.get(name)
-                        audience = self._region_audience_locked(region_id) if region_id else None
-                        if audience is None or cid in audience:
-                            visible[name] = text
-                    personal = dict(payload)
-                    personal["player_resolutions"] = visible
-                    await self.sender.send_personal(
-                        cid, ServerEvent(type="state_update", payload=personal)
-                    )
-            else:
-                await self.sender.broadcast_global(
-                    ServerEvent(type="state_update", payload=payload)
-                )
+            await self.sender.broadcast_global(ServerEvent(type="state_update", payload=payload))
             await self.sender.broadcast_global(
                 ServerEvent(type="round_start", payload={"round_number": number + 1})
             )
             for scene in scene_texts:
-                region_id = str(scene.get("region") or "")
-                audience = self._region_audience_locked(region_id) if region_id else None
-                if audience is None:
-                    await self.sender.broadcast_global(
-                        ServerEvent(type="scene_text", payload=scene)
-                    )
-                else:
-                    for cid in audience:
-                        await self.sender.send_personal(
-                            cid, ServerEvent(type="scene_text", payload=scene)
-                        )
+                await self.sender.broadcast_global(ServerEvent(type="scene_text", payload=scene))
             for note in announcements:
                 region_id = str(note.get("region") or "")
                 message = ServerEvent(type="system_msg", payload={"msg": note.get("msg", "")})
@@ -1704,6 +1674,7 @@ class GameEngine(LobbyMixin):
                 await self.sender.broadcast_global(event)
             if pending_added:
                 await self.sender.broadcast_global(self._player_roster_event())
+            await self._announce_truth_reveals(truth_reveals)
             await self._publish_usage()
 
     def _world_context_locked(self, character: str) -> str:
@@ -1721,7 +1692,7 @@ class GameEngine(LobbyMixin):
             if state:
                 parts.append(f"当前地区状态：{state}")
             visible = [
-                f"{self.items[item_id].name}（id={item_id}）"
+                self._item_label_locked(item_id)
                 + ("" if self.items[item_id].carryable else "（不可携带）")
                 for item_id in region.items
                 if self.item_location.get(item_id) == region.id and item_id in self.items
@@ -1740,13 +1711,23 @@ class GameEngine(LobbyMixin):
             if links:
                 parts.append("可前往：" + "、".join(links))
         carried = [
-            f"{self.items[item_id].name}（id={item_id}）"
+            self._item_label_locked(item_id)
             for item_id, holder in self.item_location.items()
             if holder == character and item_id in self.items
         ]
         if carried:
             parts.append("携带物品：" + "、".join(carried))
         return "\n".join(parts)
+
+    def _item_label_locked(self, item_id: str) -> str:
+        """Render one item for prompts, marking host-declared key items.
+
+        ``key_item`` is a host promise that this object matters to the solution.
+        Stating it explicitly stops the DM treating a required clue as scenery.
+        """
+        item = self.items[item_id]
+        suffix = "（关键物品）" if item.key_item else ""
+        return f"{item.name}（id={item_id}）{suffix}"
 
     async def _review_action(
         self,
@@ -1821,6 +1802,7 @@ class GameEngine(LobbyMixin):
         instant_comm = True
         duration = None
         response = None
+        kind = None
         if verdict is not None:
             response_to_raw = getattr(verdict, "response_to", None)
             proposal_to_raw = getattr(verdict, "proposal_to", None)
@@ -1832,10 +1814,20 @@ class GameEngine(LobbyMixin):
             move_to_raw = getattr(verdict, "move_to", None)
             take_item_raw = getattr(verdict, "take_item", None)
             referenced_item_raw = getattr(verdict, "referenced_item", None)
+            kind = getattr(verdict, "kind", None)
         response_to = self._canonical_roster_name(response_to_raw, roster)
         proposal_to = self._canonical_roster_name(proposal_to_raw, roster)
         if response_to_raw and response_to is None:
             raise ValueError("该提议的发起者不在队伍中。")
+        if verdict is not None and kind in ("proposal", "response"):
+            # The referee's declared kind must agree with the structured fields. Without
+            # this, kind="proposal" with an empty proposal_to was silently dropped and the
+            # player believed a proposal had been sent. An unparseable-but-present target
+            # is reported by the dedicated checks below instead.
+            if kind == "proposal" and not proposal_to and not proposal_to_raw:
+                raise ValueError("这是提议，请写明向哪位队友提议（该角色名须在队伍名单中）。")
+            if kind == "response" and not response_to and not response_to_raw:
+                raise ValueError("这是对提议的回应，请写明回应的是哪位角色。")
         if response_to:
             match = next((item for item in open_obligations if item["from"] == response_to), None)
             if match is None:
@@ -1936,12 +1928,76 @@ class GameEngine(LobbyMixin):
             rule = next((item for item in self.time_rules if item.activity == matched_rule), None)
             if rule is not None:
                 value = max(rule.minutes_min, min(rule.minutes_max, value))
+        self.action_reviews[character] = {
+            "kind": str(kind) if kind else "self",
+            "targets": sorted(
+                {
+                    name
+                    for name in (
+                        self._canonical_roster_name(raw, roster)
+                        for raw in (getattr(verdict, "targets", None) or [])
+                    )
+                    if name is not None and name != character
+                }
+            ),
+        }
         return {
             "duration": value,
             "move_to": move_to,
             "take_item": take_item,
             "investigate": investigate,
         }
+
+    def _reviewed_actions_locked(
+        self, client_ids: tuple[str, ...] | None = None
+    ) -> dict[str, dict]:
+        """Return a copy of the referee metadata for the given acting clients.
+
+        Called while the state lock is held so inference can consult a frozen
+        snapshot afterwards without taking the lock.
+        """
+        reviews: dict[str, dict] = {}
+        for client_id, player in self.players.items():
+            if client_ids is not None and client_id not in client_ids:
+                continue
+            name = player.character_name or player.name
+            entry = self.action_reviews.get(name)
+            if entry is not None:
+                reviews[name] = {
+                    "kind": entry.get("kind", "self"),
+                    "targets": list(entry.get("targets", [])),
+                }
+        return reviews
+
+    @staticmethod
+    def _mutually_opposed(reviews: dict[str, dict[str, object]]) -> list[tuple[str, str]]:
+        """Return character pairs whose reviewed actions target each other.
+
+        The referee already classifies targets for every action; this turns that
+        classification into an authoritative signal, so a player-versus-player
+        contest cannot silently skip its check just because the dice planner
+        returned false for both parties. Pure function of a frozen review snapshot,
+        so callers never need the state lock while inference is running.
+        """
+        pairs: list[tuple[str, str]] = []
+        for name, entry in reviews.items():
+            for other in entry.get("targets", []):
+                if other in reviews and name in reviews[other].get("targets", []):
+                    if (other, name) not in pairs:
+                        pairs.append((name, other))
+        return pairs
+
+    @classmethod
+    def _require_contested_checks(
+        cls, reviews: dict[str, dict[str, object]], rolled: set[str]
+    ) -> None:
+        """Reject a dice plan that leaves a mutually opposed pair unchecked."""
+        missing = [pair for pair in cls._mutually_opposed(reviews) if not set(pair) <= rolled]
+        if missing:
+            described = "、".join(f"{left}↔{right}" for left, right in missing)
+            raise LLMResolutionError(
+                "对抗行动缺少检定，请重新规划骰点。缺少检定的对抗：" + described
+            )
 
     async def _skip_vote(self, client_id: str, data: dict[str, object]) -> None:
         """Record a skip vote; a unanimous vote skips the active player's input."""
@@ -2194,7 +2250,11 @@ class GameEngine(LobbyMixin):
                 "previous_state": self.current_scenario_state or "",
                 "event_context": "\n\n".join(self.pending_event_injections),
                 "truth_context": self._truth_context(),
+                # Frozen while the lock is held; read later without it.
+                "action_reviews": self._reviewed_actions_locked(tuple(actions)),
             }
+            # Each referee verdict is consumed by this round only.
+            self.action_reviews.clear()
         self._launch_job_locked(self._resolve_round, GameState.AWAITING_LLM)
 
     async def _retry_round(self, client_id: str, data: dict[str, object]) -> None:
@@ -2275,6 +2335,10 @@ class GameEngine(LobbyMixin):
                     name for name, required in plan.rolls.items() if required
                 }:
                     raise LLMResolutionError("骰点计划参与者无效。")
+                self._require_contested_checks(
+                    pending.get("action_reviews") or {},
+                    {name for name, required in plan.rolls.items() if required},
+                )
                 pending["hidden"] = set(plan.hidden_rolls)
                 pending["dice"] = {
                     name: roll_d100() for name, required in plan.rolls.items() if required
@@ -2610,6 +2674,21 @@ class GameEngine(LobbyMixin):
         )
 
 
+def _restore_model(model: type, entry: object) -> object:
+    """Rebuild one persisted model, dropping fields this version no longer knows.
+
+    Saved rooms outlive code changes: a room saved with a field that has since
+    been removed (or renamed) must still load, because the persisted models use
+    ``extra="forbid"`` and would otherwise reject the whole room. Unknown keys are
+    dropped with a warning rather than discarding a game in progress.
+    """
+    known = set(model.model_fields)
+    extra = sorted(set(entry) - known)
+    if extra:
+        LOGGER.warning("Dropping retired persisted field(s) %s for %s", extra, model.__name__)
+    return model(**{key: value for key, value in entry.items() if key in known})
+
+
 def restore_engine(
     data: dict[str, object],
     sender: EventSender,
@@ -2622,7 +2701,9 @@ def restore_engine(
     if engine.state in {GameState.ACTIVE_TURN, GameState.AWAITING_LLM}:
         # Resume at a fresh turn; any in-flight round is simply restarted.
         engine.state = GameState.ACTIVE_TURN
-    engine.cast = [Character(**char) for char in data.get("cast", [])]
+    engine.cast = [
+        _restore_model(Character, char) for char in data.get("cast", []) if isinstance(char, dict)
+    ]
     engine.claims = dict(data.get("claims", {}))
     players: dict[str, Player] = {}
     for entry in data.get("players", []):
@@ -2646,12 +2727,18 @@ def restore_engine(
     engine.regions = {
         region.id: region
         for region in (
-            Region(**entry) for entry in data.get("regions", []) if isinstance(entry, dict)
+            _restore_model(Region, entry)
+            for entry in data.get("regions", [])
+            if isinstance(entry, dict)
         )
     }
     engine.items = {
         item.id: item
-        for item in (Item(**entry) for entry in data.get("items", []) if isinstance(entry, dict))
+        for item in (
+            _restore_model(Item, entry)
+            for entry in data.get("items", [])
+            if isinstance(entry, dict)
+        )
     }
     engine.world_start_region = str(data.get("world_start_region", ""))
     engine.region_of = {str(key): str(value) for key, value in data.get("region_of", {}).items()}
@@ -2683,24 +2770,34 @@ def restore_engine(
     engine.max_elapsed_minutes = int(data.get("max_elapsed_minutes", 600))
     engine.default_elapsed_minutes = int(data.get("default_elapsed_minutes", 15))
     engine.time_rules = [
-        TimeRule(**rule) for rule in data.get("time_rules", []) if isinstance(rule, dict)
+        _restore_model(TimeRule, rule)
+        for rule in data.get("time_rules", [])
+        if isinstance(rule, dict)
     ]
     engine.timed_events = [
-        TimedEvent(**event) for event in data.get("timed_events", []) if isinstance(event, dict)
+        _restore_model(TimedEvent, event)
+        for event in data.get("timed_events", [])
+        if isinstance(event, dict)
     ]
     engine.fired_events = {str(name) for name in data.get("fired_events", [])}
     engine.event_log = [
         dict(entry) for entry in data.get("event_log", []) if isinstance(entry, dict)
     ]
     engine.lorebook = [
-        LorebookEntry(**entry) for entry in data.get("lorebook", []) if isinstance(entry, dict)
+        _restore_model(LorebookEntry, entry)
+        for entry in data.get("lorebook", [])
+        if isinstance(entry, dict)
     ]
     engine.prompt_blocks = [
-        PromptBlock(**block) for block in data.get("prompt_blocks", []) if isinstance(block, dict)
+        _restore_model(PromptBlock, block)
+        for block in data.get("prompt_blocks", [])
+        if isinstance(block, dict)
     ]
-    engine.sampling = SamplingConfig(**data.get("sampling", {}))
+    engine.sampling = _restore_model(SamplingConfig, data.get("sampling") or {})
     engine.plugins = [
-        RoomPlugin(**plugin) for plugin in data.get("plugins", []) if isinstance(plugin, dict)
+        _restore_model(RoomPlugin, plugin)
+        for plugin in data.get("plugins", [])
+        if isinstance(plugin, dict)
     ]
     engine.truth_revealed = {str(item) for item in data.get("truth_revealed", [])}
     engine.truth_answers = {

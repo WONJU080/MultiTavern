@@ -65,8 +65,14 @@ async def build_truth_game(
     host_character: str = "Host",
     time_config: dict[str, object] | None = None,
     events: list[dict[str, object]] | None = None,
+    regions: list[dict[str, object]] | None = None,
+    world: dict[str, object] | None = None,
 ) -> tuple[GameEngine, FakeSender, FakeResolver]:
-    """Start a two-character mystery game with the possible-truths plugin."""
+    """Start a two-character mystery game with the possible-truths plugin.
+
+    Passing ``regions`` makes the card run on the strict timeline, where each
+    action has its own duration and the clock advances by completion boundaries.
+    """
     sender = FakeSender()
     resolver = FakeResolver()
     engine = GameEngine(sender, resolver)
@@ -82,6 +88,8 @@ async def build_truth_game(
             plugins=plugins if plugins is not None else plugin_config(),
             time_config=time_config,
             events=events,
+            regions=regions,
+            world=world,
             random_turn_order=False,
         ),
     )
@@ -253,6 +261,119 @@ def test_event_and_time_conditions_reveal_after_commit(tmp_path: Path) -> None:
         await engine.wait_for_inference()
         assert engine.fired_events == {"午夜钟声"}
         assert truth_question_ids(sender) == ["q_start", "q_round", "q_event", "q_time"]
+
+    asyncio.run(run())
+
+
+STRICT_REGIONS = [
+    {"id": "quay", "name": "码头", "items": [], "links": [{"to": "office"}]},
+    {"id": "office", "name": "办公室", "items": [], "links": []},
+]
+STRICT_WORLD = {"start_region": "quay"}
+
+
+async def settle(engine: GameEngine, times: int = 4) -> None:
+    """Join the current inference job and any job it chained."""
+    for _ in range(times):
+        await engine.wait_for_inference()
+
+
+async def play_strict_boundary(engine: GameEngine, action: str) -> None:
+    """Submit both players' actions for the open strict window and settle."""
+    await engine.process_payload("host", payload("action", action=action))
+    await engine.process_payload("player", payload("action", action=action))
+    await settle(engine)
+
+
+def test_strict_completion_boundary_reveals_event_and_time_conditions(tmp_path: Path) -> None:
+    """Strict games reveal questions once the clock reaches their condition."""
+
+    async def run() -> None:
+        engine, sender, _ = await build_truth_game(
+            tmp_path,
+            time_config=TIME_CONFIG,
+            events=EVENTS,
+            regions=STRICT_REGIONS,
+            world=STRICT_WORLD,
+        )
+        assert engine.schedule_mode == "strict"
+        assert truth_question_ids(sender) == ["q_start"]
+
+        # First completion boundary: 390 -> 420 in-game minutes.
+        await play_strict_boundary(engine, "在码头等")
+        assert truth_question_ids(sender) == ["q_start", "q_round"]
+
+        # Second boundary reaches 450, where the midnight bell is due.
+        await play_strict_boundary(engine, "继续等")
+        assert engine.fired_events == {"午夜钟声"}
+        assert truth_question_ids(sender) == ["q_start", "q_round", "q_event", "q_time"]
+
+    asyncio.run(run())
+
+
+def test_strict_event_boundary_reveals_conditions(tmp_path: Path) -> None:
+    """A world event between two completions also reveals its question."""
+
+    async def run() -> None:
+        event = {
+            "name": "涨潮",
+            "day": 1,
+            "minute": 400,
+            "description": "潮水漫上码头。",
+            "public": True,
+        }
+        engine, sender, _ = await build_truth_game(
+            tmp_path,
+            plugins=plugin_config(
+                questions=[
+                    {"id": "q_start", "text": "谁在说谎？", "condition": "start"},
+                    {
+                        "id": "q_tide",
+                        "text": "涨潮时谁还在码头？",
+                        "condition": "event",
+                        "event_name": "涨潮",
+                    },
+                ]
+            ),
+            time_config=TIME_CONFIG,
+            events=[event],
+            regions=STRICT_REGIONS,
+            world=STRICT_WORLD,
+        )
+        assert truth_question_ids(sender) == ["q_start"]
+
+        # The tide is due at 400 while the 30-minute action ends at 420, so the
+        # clock stops at the event boundary first.
+        await play_strict_boundary(engine, "在码头等")
+
+        assert engine.fired_events == {"涨潮"}
+        assert truth_question_ids(sender) == ["q_start", "q_tide"]
+        assert engine.truth_revealed == {"q_start", "q_tide"}
+
+    asyncio.run(run())
+
+
+def test_strict_revealed_question_can_be_answered(tmp_path: Path) -> None:
+    """A strict-mode reveal is submittable, so the whole chain works."""
+
+    async def run() -> None:
+        engine, sender, _ = await build_truth_game(
+            tmp_path,
+            time_config=TIME_CONFIG,
+            events=EVENTS,
+            regions=STRICT_REGIONS,
+            world=STRICT_WORLD,
+        )
+        await play_strict_boundary(engine, "在码头等")
+        assert "q_round" in engine.truth_revealed
+
+        await engine.process_payload(
+            "player", payload("truth_submit", question_id="q_round", answer="钥匙是守夜人拿走的。")
+        )
+        await settle(engine)
+
+        assert sender.events_of_type("truth_result")[-1].payload["valid"] is True
+        assert engine.truth_used_round["Player"] == 2
 
     asyncio.run(run())
 

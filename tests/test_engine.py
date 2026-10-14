@@ -99,13 +99,28 @@ class FakeResolver:
             player_resolutions={},
         )
 
+    async def plan_dice(self, round_buffer: dict[str, str], current_state: str = "") -> DicePlan:
+        """Check every action, so a contested pair always satisfies the guard.
+
+        ``ControlledResolver`` overrides this; tests that need an unchecked plan
+        replace the attribute directly.
+        """
+        return DicePlan(rolls={name: True for name in round_buffer}, hidden_rolls=[])
+
     async def generate_resolution(
-        self, round_buffer: dict[str, str], current_time: str = "", event_context: str = ""
+        self,
+        round_buffer: dict[str, str],
+        dice_results: dict[str, int] | None = None,
+        hidden_rolls: set[str] | None = None,
+        current_time: str = "",
+        event_context: str = "",
     ) -> RoundResolution:
         """Return a fixed resolution for the given actions."""
         self.rounds += 1
         self.resolution_time = current_time
         self.event_context = event_context
+        self.last_dice = dict(dice_results or {})
+        self.last_hidden = set(hidden_rolls or set())
         return RoundResolution(
             round_title=f"Round {self.rounds}",
             global_narrative=f"State after round {self.rounds}.",

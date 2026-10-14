@@ -1,6 +1,7 @@
 """Fixed-time story events: scheduling, firing, injection, and persistence."""
 
 import asyncio
+import json
 
 import pytest
 
@@ -226,6 +227,50 @@ def test_backstage_event_has_no_public_announcement(tmp_path):
             if "全局事件" in event.payload["msg"]
         ]
         assert announcements == []
+        await engine.shutdown()
+
+    asyncio.run(run())
+
+
+def test_codex_hides_non_public_event_descriptions(tmp_path):
+    """The codex lists a fired event, but never its backstage description."""
+
+    async def run():
+        engine, sender, _ = await started_game_with_events(
+            tmp_path,
+            [
+                {
+                    "name": "午时广播",
+                    "day": 1,
+                    "minute": 420,
+                    "description": "全城广播响起",
+                    "public": True,
+                },
+                {
+                    "name": "暗中监视",
+                    "day": 1,
+                    "minute": 420,
+                    "description": "真凶其实是管家",
+                    "public": False,
+                },
+            ],
+        )
+        await play_round(engine)
+        await engine.process_payload("host", payload("codex_request"))
+        codex = sender.events_of_type("codex_state")[-1].payload
+        events = {event["name"]: event for event in codex["events"]}
+
+        # Both fired events are listed, with their names.
+        assert set(events) == {"午时广播", "暗中监视"}
+        # The public event keeps its description.
+        assert events["午时广播"]["description"] == "全城广播响起"
+        assert events["午时广播"]["public"] is True
+        # The non-public event is listed, but keeps its spoiler backstage.
+        assert events["暗中监视"]["description"] == ""
+        assert events["暗中监视"]["public"] is False
+        assert "真凶其实是管家" not in json.dumps(codex, ensure_ascii=False)
+        # The full text is still archived for the operator.
+        assert engine.event_log[1]["description"] == "真凶其实是管家"
         await engine.shutdown()
 
     asyncio.run(run())

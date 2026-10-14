@@ -320,12 +320,11 @@ def test_npc_time_event_fires_in_its_region(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
-def test_private_region_outcomes_are_filtered(tmp_path: Path) -> None:
-    """A private region's outcome and scene text only reach players inside it."""
+def test_region_outcomes_reach_every_player(tmp_path: Path) -> None:
+    """Every resolution is party-shared, regardless of who acted or where."""
 
     async def run() -> None:
         regions = [dict(region) for region in REGIONS]
-        regions[1]["private"] = True
         sender = FakeSender()
         resolver = FakeResolver()
         engine = GameEngine(sender, resolver)
@@ -349,6 +348,7 @@ def test_private_region_outcomes_are_filtered(tmp_path: Path) -> None:
         await engine.process_payload("host", payload("start_game"))
         await engine.wait_for_inference()
 
+        # Host explores a region the other player has never entered.
         engine.region_of["Host"] = "cave"
         engine.visited_regions.add("cave")
         resolver.review_results = [
@@ -358,20 +358,12 @@ def test_private_region_outcomes_are_filtered(tmp_path: Path) -> None:
         await engine.process_payload("p1", payload("hold"))
         await settle(engine)
 
-        personal_updates = {
-            client_id: event
-            for client_id, event in sender.events
-            if client_id is not None and event.type == "state_update"
-        }
-        assert personal_updates
-        host_payload = personal_updates["host"].payload
-        player_payload = personal_updates["p1"].payload
-        assert "Host" in host_payload["player_resolutions"]
-        assert "Host" not in player_payload["player_resolutions"]
-        scenes = [
-            (client_id, event) for client_id, event in sender.events if event.type == "scene_text"
-        ]
-        assert all(client_id == "host" for client_id, _ in scenes)
+        # The outcome is broadcast to the room, not filtered per region.
+        updates = [event for _, event in sender.events if event.type == "state_update"]
+        assert updates
+        assert any("Host" in event.payload["player_resolutions"] for event in updates)
+        scenes = [event for _, event in sender.events if event.type == "scene_text"]
+        assert scenes
 
     asyncio.run(run())
 
@@ -479,5 +471,52 @@ def test_codex_lists_discovered_items_and_fired_events(tmp_path: Path) -> None:
         assert altar["investigated"] is True
         assert [event["name"] for event in data["events"]] == ["陷阱触发"]
         assert data["events"][0]["description"] == "脚下石板塌陷。"
+
+    asyncio.run(run())
+
+
+def test_key_items_are_marked_for_the_dm_and_the_players(tmp_path: Path) -> None:
+    """`key_item` reaches the DM prompt and the player-facing payloads."""
+
+    async def run() -> None:
+        engine, sender, _ = await build_world(tmp_path)
+
+        # The DM prompt marks the host-declared key item so it is not treated as scenery.
+        context = engine._world_context_locked("Host")
+        assert "铜钥匙" in context and "关键物品" in context
+        # A non-key item in the same region is not marked.
+        assert "石祭坛" not in context
+
+        # The codex payload carries the flag through to the client. (The map lists only
+        # items still lying in a region, so a taken item moves to the pack instead.)
+        await engine.process_payload("host", payload("codex_request"))
+        codex = sender.events_of_type("codex_state")[-1].payload
+        by_id = {item["id"]: item for item in codex["items"]}
+        # The key item is in the visited start region, so it is discovered and flagged.
+        assert by_id["key"]["key_item"] is True
+        # The cave has not been visited, so its altar is not in the codex yet.
+        assert "altar" not in by_id
+        engine.visited_regions.add("cave")
+        await engine.process_payload("host", payload("codex_request"))
+        codex = sender.events_of_type("codex_state")[-1].payload
+        by_id = {item["id"]: item for item in codex["items"]}
+        assert by_id["altar"]["key_item"] is False
+
+        await engine.shutdown()
+
+    asyncio.run(run())
+
+
+def test_key_item_flag_survives_persistence(tmp_path: Path) -> None:
+    """A restored room keeps the host's key-item marking."""
+
+    async def run() -> None:
+        engine, sender, _ = await build_world(tmp_path)
+        restored = restore_engine(engine.to_persistent_dict(), sender, FakeResolver)
+        assert restored.items["key"].key_item is True
+        assert restored.items["altar"].key_item is False
+        assert "关键物品" in restored._world_context_locked("Host")
+        await engine.shutdown()
+        await restored.shutdown()
 
     asyncio.run(run())
