@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anyworld 剧情卡跑测台</title>
+<style>
+  :root {
+    --bg: #0b1212; --panel: #121b1a; --panel-2: #172220; --border: #24352f;
+    --text: #e0e9e5; --muted: #8ba69c; --accent: #59c39a; --warn: #e0b25c; --fail: #e07a6c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.6 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  header { padding: 18px 22px; border-bottom: 1px solid var(--border); }
+  h1 { margin: 0 0 4px; font-size: 18px; }
+  header p { margin: 0; color: var(--muted); font-size: 13px; }
+  main { display: grid; grid-template-columns: minmax(360px, 1fr) minmax(420px, 1.1fr);
+         gap: 16px; padding: 16px 22px 40px; align-items: start; }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+            padding: 14px 16px; margin-bottom: 14px; }
+  section h2 { margin: 0 0 10px; font-size: 14px; color: var(--accent); letter-spacing: .5px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+  input, select, textarea { width: 100%; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; font: inherit; }
+  input[type=checkbox] { width: auto; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+  .inline { display: flex; gap: 8px; align-items: center; }
+  .inline input[type=text], .inline input[type=password] { flex: 1; }
+  button { background: var(--accent); color: #05221a; border: 0; border-radius: 6px;
+           padding: 9px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .card-row { border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px;
+              margin-bottom: 8px; background: var(--panel-2); }
+  .card-row.bad { border-color: var(--fail); }
+  .card-row strong { display: block; font-size: 13px; }
+  .card-row span { color: var(--muted); font-size: 12px; }
+  .log { max-height: 260px; overflow: auto; font-family: ui-monospace, Menlo, monospace;
+         font-size: 12px; background: var(--panel-2); border-radius: 8px; padding: 8px 10px; }
+  .log div { padding: 1px 0; }
+  .k-phase { color: var(--accent); } .k-warning { color: var(--warn); }
+  .k-error { color: var(--fail); } .k-stopped { color: var(--accent); font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+  th, td { text-align: left; border-bottom: 1px solid var(--border); padding: 4px 6px; }
+  th { color: var(--muted); font-weight: 500; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px;
+           border: 1px solid var(--border); }
+  .badge.ok { color: var(--accent); border-color: var(--accent); }
+  .badge.unfinished { color: var(--warn); border-color: var(--warn); }
+  .badge.failed { color: var(--fail); border-color: var(--fail); }
+  .issue { padding: 4px 0 4px 2px; font-size: 12.5px; }
+  .issue.warning { color: var(--warn); } .issue.error { color: var(--fail); }
+  details { margin-top: 8px; } summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--muted); }
+  .round { border-left: 2px solid var(--border); padding: 4px 0 4px 10px; margin: 8px 0; }
+  .round b { color: var(--accent); font-weight: 600; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Anyworld 剧情卡跑测台</h1>
+  <p>填好服务器与座位 API，先「自检」，再「开始跑测」。API Key 只存在这个本地进程的内存里，不会写盘。</p>
+</header>
+<main>
+  <div>
+    <section>
+      <h2>1 · 服务器与 DM</h2>
+      <label>服务器地址（运行中的 anyworld）</label>
+      <input id="serverUrl" placeholder="https://127.0.0.1:4141">
+      <div class="inline" style="margin-top:6px">
+        <input type="checkbox" id="verifyTls"> <span class="muted">校验 TLS 证书（自签证书请留空不勾）</span>
+      </div>
+      <div class="inline" style="margin-top:4px">
+        <input type="checkbox" id="useProxy"> <span class="muted">经系统代理连接（默认直连；本机地址始终直连）</span>
+      </div>
+      <label>房间 DM 凭据</label>
+      <select id="dmMode">
+        <option value="borrow">borrow —— 借用服务器的 llm.api_key</option>
+        <option value="own">own —— 由我提供 DM 的 API</option>
+      </select>
+      <div id="dmOwn" hidden>
+        <div class="row">
+          <div><label>DM endpoint</label><input id="dmEndpoint" placeholder="https://api.deepseek.com/v1"></div>
+          <div><label>DM 模型</label><input id="dmModel" placeholder="deepseek-chat"></div>
+        </div>
+        <label>DM API Key</label>
+        <div class="inline"><input type="password" id="dmKey" placeholder="sk-...">
+          <button class="ghost" type="button" data-reveal="dmKey">显示</button></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>2 · 剧情卡</h2>
+      <div id="cards" class="muted">正在读取卡牌…</div>
+      <div class="hint">卡牌来自启动时指定的目录（默认 examples/）。列表里 ✗ 的卡不能跑。</div>
+    </section>
+
+    <section>
+      <h2>3 · 座位 API</h2>
+      <label>默认座位（未单独设置的角色都用它）</label>
+      <div class="row">
+        <div><label>endpoint</label><input id="seatEndpoint" placeholder="https://api.deepseek.com/v1"></div>
+        <div><label>模型</label><input id="seatModel" placeholder="deepseek-chat"></div>
+      </div>
+      <label>API Key</label>
+      <div class="inline"><input type="password" id="seatKey" placeholder="sk-...">
+        <button class="ghost" type="button" data-reveal="seatKey">显示</button></div>
+      <div class="row-3">
+        <div><label>温度</label><input id="seatTemp" type="number" step="0.1" min="0" max="2" placeholder="1.0"></div>
+        <div><label>玩家风格</label>
+          <select id="seatStyle">
+            <option value="rotate">rotate（按角色轮转）</option>
+            <option value="explore">explore 探索</option>
+            <option value="social">social 社交</option>
+            <option value="bold">bold 冒进</option>
+            <option value="cautious">cautious 谨慎</option>
+            <option value="orderly">orderly 守序</option>
+          </select></div>
+        <div><label>单次输出上限 token</label><input id="seatMaxTokens" type="number" min="16" max="32000" placeholder="400"></div>
+      </div>
+      <label style="margin-top:12px">按角色覆盖（留空 = 继承默认）</label>
+      <div id="seats" class="muted">选择一张卡后显示角色名单。</div>
+    </section>
+
+    <section>
+      <h2>4 · 预算</h2>
+      <div class="row-3">
+        <div><label>最多回合</label><input id="maxRounds" type="number" min="1" max="500" value="6"></div>
+        <div><label>时间上限（分钟）</label><input id="maxMinutes" type="number" min="1" value="30"></div>
+        <div><label>看门狗（秒）</label><input id="stallSeconds" type="number" min="1" value="180"></div>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <div><label>单次座位调用超时（秒）</label><input id="seatTimeout" type="number" min="1" value="60"></div>
+        <div><label>报告输出目录</label><input id="outDir" placeholder="playtest-runs"></div>
+      </div>
+      <div class="inline" style="margin-top:8px">
+        <input type="checkbox" id="dryRun"> <span class="muted">dry-run：座位用脚本化行动，只花 DM 的 token</span>
+      </div>
+      <div class="inline" style="margin-top:4px">
+        <input type="checkbox" id="debugPrompts"> <span class="muted">调试落盘：每个座位收到的提示词 + 模型原始回复（写入该次报告目录）</span>
+      </div>
+      <div class="inline" style="margin-top:4px">
+        <input type="checkbox" id="rememberKeys"> <span class="muted">在本机浏览器保存 API Key（localStorage，默认关闭）</span>
+      </div>
+      <div class="actions">
+        <button id="checkBtn" class="ghost" type="button">自检（不花 token）</button>
+        <button id="runBtn" type="button">开始跑测</button>
+        <button id="stopBtn" class="ghost" type="button" disabled>停止</button>
+      </div>
+      <div class="hint" id="status"></div>
+    </section>
+  </div>
+
+  <div>
+    <section>
+      <h2>自检结果</h2>
+      <div id="checks" class="muted">还没有自检。</div>
+    </section>
+
+    <section>
+      <h2>跑测进度</h2>
+      <div id="log" class="log"><div class="muted">还没有开始。</div></div>
+    </section>
+
+    <section>
+      <h2>报告</h2>
+      <div id="report" class="muted">跑测结束后在这里显示结论、覆盖度与问题清单。</div>
+    </section>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const STORE = "anyworld-playtest-ui";
+let cards = [];
+let currentRun = null;
+let pollTimer = null;
+
+function collect() {
+  const overrides = {};
+  document.querySelectorAll("[data-seat]").forEach((row) => {
+    const name = row.dataset.seat;
+    const entry = {};
+    const model = row.querySelector("[data-field=model]").value.trim();
+    const style = row.querySelector("[data-field=style]").value;
+    const temp = row.querySelector("[data-field=temp]").value.trim();
+    const endpoint = row.querySelector("[data-field=endpoint]").value.trim();
+    const key = row.querySelector("[data-field=key]").value.trim();
+    if (model) entry.model_name = model;
+    if (style && style !== "") entry.style = style;
+    if (temp !== "") entry.temperature = Number(temp);
+    if (endpoint) entry.endpoint = endpoint;
+    if (key) entry.api_key = key;
+    if (Object.keys(entry).length) overrides[name] = entry;
+  });
+  const seatDefault = {};
+  if ($("seatEndpoint").value.trim()) seatDefault.endpoint = $("seatEndpoint").value.trim();
+  if ($("seatModel").value.trim()) seatDefault.model_name = $("seatModel").value.trim();
+  if ($("seatKey").value.trim()) seatDefault.api_key = $("seatKey").value.trim();
+  if ($("seatTemp").value.trim() !== "") seatDefault.temperature = Number($("seatTemp").value);
+  if ($("seatStyle").value) seatDefault.style = $("seatStyle").value;
+  if ($("seatMaxTokens").value.trim() !== "") seatDefault.max_output_tokens = Number($("seatMaxTokens").value);
+
+  const dm = $("dmMode").value === "own"
+    ? { mode: "own", endpoint: $("dmEndpoint").value.trim() || null,
+        model_name: $("dmModel").value.trim() || null, api_key: $("dmKey").value.trim() || null }
+    : { mode: "borrow" };
+
+  return {
+    card: selectedCard(),
+    config: {
+      server: { url: $("serverUrl").value.trim() || "https://127.0.0.1:4141",
+                verify_tls: $("verifyTls").checked, proxy: $("useProxy").checked },
+      dm,
+      seats: { default: seatDefault, overrides },
+      run: {
+        max_rounds: Number($("maxRounds").value || 6),
+        max_minutes: Number($("maxMinutes").value || 30),
+        stall_seconds: Number($("stallSeconds").value || 180),
+        seat_timeout_seconds: Number($("seatTimeout").value || 60),
+        dry_run: $("dryRun").checked,
+        debug_prompts: $("debugPrompts").checked,
+      },
+      report: { out_dir: $("outDir").value.trim() || "playtest-runs", formats: ["json", "markdown"] },
+      card: selectedCard(),
+    },
+  };
+}
+
+function selectedCard() {
+  const picked = document.querySelector("input[name=card]:checked");
+  return picked ? picked.value : "";
+}
+
+async function loadCards() {
+  const response = await fetch("/api/cards");
+  const payload = await response.json();
+  cards = payload.cards || [];
+  const box = $("cards");
+  if (!cards.length) {
+    box.innerHTML = '<div class="muted">没有找到卡牌。用 <code>--cards 目录</code> 指定包含 *.anyworld.json 的目录。</div>';
+    return;
+  }
+  box.innerHTML = cards.map((card) => {
+    const counts = card.counts || {};
+    const detail = card.ok
+      ? `${card.schedule} 模式 · 角色 ${counts.characters || 0} · 地区 ${counts.regions || 0} · 物品 ${counts.items || 0} · 事件 ${counts.events || 0}`
+      : "不可跑：" + (card.errors || []).join("；");
+    return `<label class="card-row ${card.ok ? "" : "bad"}">
+      <input type="radio" name="card" value="${card.path}" ${card.ok ? "" : "disabled"}>
+      <strong>${card.title}</strong><span>${detail}</span></label>`;
+  }).join("");
+  box.querySelectorAll("input[name=card]").forEach((input) => {
+    input.addEventListener("change", () => { renderSeats(); save(); });
+  });
+  const first = box.querySelector("input[name=card]:not([disabled])");
+  if (first) { first.checked = true; renderSeats(); }
+}
+
+function renderSeats() {
+  const card = cards.find((item) => item.path === selectedCard());
+  const box = $("seats");
+  if (!card || !card.characters.length) { box.innerHTML = '<div class="muted">这张卡没有角色名单。</div>'; return; }
+  box.innerHTML = card.characters.map((name) => `
+    <div class="card-row" data-seat="${name}">
+      <strong>${name}</strong>
+      <div class="row-3">
+        <div><label>模型</label><input data-field="model" placeholder="继承默认"></div>
+        <div><label>风格</label><select data-field="style">
+          <option value="">继承默认</option>
+          <option value="explore">explore</option><option value="social">social</option>
+          <option value="bold">bold</option><option value="cautious">cautious</option>
+          <option value="orderly">orderly</option></select></div>
+        <div><label>温度</label><input data-field="temp" placeholder="继承默认"></div>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <div><label>独立 endpoint</label><input data-field="endpoint" placeholder="继承默认"></div>
+        <div><label>独立 Key</label><input data-field="key" type="password" placeholder="继承默认"></div>
+      </div>
+    </div>`).join("");
+  $("seats").querySelectorAll("input,select").forEach((el) => el.addEventListener("change", save));
+}
+
+function save() {
+  const data = {
+    serverUrl: $("serverUrl").value, verifyTls: $("verifyTls").checked,
+    useProxy: $("useProxy").checked, dmMode: $("dmMode").value,
+    dmEndpoint: $("dmEndpoint").value, dmModel: $("dmModel").value,
+    seatEndpoint: $("seatEndpoint").value, seatModel: $("seatModel").value,
+    seatTemp: $("seatTemp").value, seatStyle: $("seatStyle").value,
+    seatMaxTokens: $("seatMaxTokens").value, maxRounds: $("maxRounds").value,
+    maxMinutes: $("maxMinutes").value, stallSeconds: $("stallSeconds").value,
+    seatTimeout: $("seatTimeout").value, outDir: $("outDir").value, dryRun: $("dryRun").checked,
+    debugPrompts: $("debugPrompts").checked,
+    card: selectedCard(),
+  };
+  if ($("rememberKeys").checked) {
+    data.dmKey = $("dmKey").value;
+    data.seatKey = $("seatKey").value;
+  }
+  localStorage.setItem(STORE, JSON.stringify(data));
+}
+
+function restore() {
+  let data = {};
+  try { data = JSON.parse(localStorage.getItem(STORE) || "{}"); } catch (error) { data = {}; }
+  const map = { serverUrl: "serverUrl", dmEndpoint: "dmEndpoint", dmModel: "dmModel",
+    seatEndpoint: "seatEndpoint", seatModel: "seatModel", seatTemp: "seatTemp",
+    seatMaxTokens: "seatMaxTokens", maxRounds: "maxRounds", maxMinutes: "maxMinutes",
+    stallSeconds: "stallSeconds", seatTimeout: "seatTimeout", outDir: "outDir",
+    dmKey: "dmKey", seatKey: "seatKey" };
+  Object.entries(map).forEach(([key, id]) => { if (data[key]) $(id).value = data[key]; });
+  if (data.dmMode) $("dmMode").value = data.dmMode;
+  if (data.seatStyle) $("seatStyle").value = data.seatStyle;
+  if (data.verifyTls) $("verifyTls").checked = true;
+  if (data.useProxy) $("useProxy").checked = true;
+  if (data.dryRun) $("dryRun").checked = true;
+  if (data.debugPrompts) $("debugPrompts").checked = true;
+  if (data.dmKey || data.seatKey) $("rememberKeys").checked = true;
+  $("dmOwn").hidden = $("dmMode").value !== "own";
+}
+
+function each(id) { return $(id); }
+["serverUrl","verifyTls","useProxy","dmMode","debugPrompts","dmEndpoint","dmModel","dmKey","seatEndpoint","seatModel",
+ "seatKey","seatTemp","seatStyle","seatMaxTokens","maxRounds","maxMinutes","stallSeconds",
+ "seatTimeout","outDir","dryRun","rememberKeys"].forEach((id) => {
+  each(id).addEventListener("change", () => {
+    if (id === "dmMode") $("dmOwn").hidden = $("dmMode").value !== "own";
+    save();
+  });
+});
+document.querySelectorAll("[data-reveal]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const field = $(button.dataset.reveal);
+    const hidden = field.type === "password";
+    field.type = hidden ? "text" : "password";
+    button.textContent = hidden ? "隐藏" : "显示";
+  });
+});
+
+function logLine(event) {
+  const box = $("log");
+  if (box.dataset.clean !== "1") { box.innerHTML = ""; box.dataset.clean = "1"; }
+  const line = document.createElement("div");
+  line.className = "k-" + (event.kind || "info");
+  line.textContent = `[${(event.elapsed ?? 0).toFixed(1)}s] ${event.message}`;
+  box.appendChild(line);
+  box.scrollTop = box.scrollHeight;
+}
+
+$("checkBtn").addEventListener("click", async () => {
+  const body = collect();
+  if (!body.card) { $("status").textContent = "先选一张卡。"; return; }
+  $("status").textContent = "正在自检…";
+  const response = await fetch("/api/check", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!response.ok) { $("status").textContent = "自检失败：" + await response.text(); return; }
+  const payload = await response.json();
+  $("checks").innerHTML = (payload.checks || []).map((item) => {
+    const mark = item.level === "ok" ? "✓" : item.level === "warn" ? "⚠" : "✗";
+    const cls = item.level === "ok" ? "ok" : item.level === "warn" ? "unfinished" : "failed";
+    return `<div class="issue"><span class="badge ${cls}">${mark}</span> ${item.name}：${item.detail || ""}</div>`;
+  }).join("") || '<div class="muted">没有结果。</div>';
+  $("status").textContent = payload.ok ? "自检通过，可以跑测。" : "自检发现阻塞问题，先修好再跑。";
+});
+
+$("runBtn").addEventListener("click", async () => {
+  const body = collect();
+  if (!body.card) { $("status").textContent = "先选一张卡。"; return; }
+  $("runBtn").disabled = true; $("stopBtn").disabled = false;
+  $("report").innerHTML = '<div class="muted">跑测中…</div>';
+  $("log").dataset.clean = "0";
+  $("status").textContent = "正在启动…";
+  const response = await fetch("/api/runs", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({}));
+    $("status").textContent = "启动失败：" + (detail.detail || response.statusText);
+    $("runBtn").disabled = false; $("stopBtn").disabled = true; return;
+  }
+  const { id } = await response.json();
+  currentRun = id;
+  $("status").textContent = "跑测中…（" + id + "）";
+  let seen = 0;
+  pollTimer = setInterval(async () => {
+    const state = await (await fetch(`/api/runs/${id}`)).json();
+    const progress = state.progress || [];
+    for (; seen < progress.length; seen += 1) logLine(progress[seen]);
+    if (state.status !== "running") {
+      clearInterval(pollTimer); pollTimer = null;
+      $("runBtn").disabled = false; $("stopBtn").disabled = true;
+      $("status").textContent = state.status === "finished" ? "跑测结束。" : "跑测中止：" + (state.error || state.status);
+      renderReport(state);
+    }
+  }, 1000);
+});
+
+$("stopBtn").addEventListener("click", async () => {
+  if (!currentRun) return;
+  await fetch(`/api/runs/${currentRun}/stop`, { method: "POST" });
+  $("status").textContent = "正在停止…";
+});
+
+function renderReport(state) {
+  const report = state.report;
+  if (!report) { $("report").innerHTML = `<div class="issue error">${state.error || "没有报告。"}</div>`; return; }
+  if (state.status === "stopped") {
+    $("report").innerHTML = '<div class="issue warning">跑测已停止，以下是停止前已完成的部分。</div>';
+  }
+  const run = report.run || {}, coverage = report.coverage || {}, health = report.health || {};
+  const verdict = health.verdict || "ok";
+  const verdictText = { ok: "正常结束", unfinished: "未达结局", failed: "运行失败" }[verdict] || verdict;
+  const regions = coverage.regions || {}, items = coverage.items || {}, events = coverage.events || {},
+        truths = coverage.truths || {}, time = coverage.time || {};
+  const issues = (health.issues || []).map((item) =>
+    `<div class="issue ${item.level}">${{error:"✗",warning:"⚠",info:"ℹ"}[item.level] || "•"} [${item.code}] ${item.message}</div>`
+  ).join("") || '<div class="muted">未发现异常。</div>';
+  const rounds = (report.rounds || []).map((record) => `
+    <div class="round"><b>第 ${record.number} 回合${record.game_time ? "（" + record.game_time + "）" : ""}</b>
+      ${Object.entries(record.actions || {}).map(([who, what]) => `<div>· <b>${who}</b>：${what}</div>`).join("")}
+      ${record.narrative ? `<div class="muted">${record.narrative}</div>` : ""}
+      ${Object.entries(record.outcomes || {}).map(([who, what]) => `<div class="muted">· ${who}：${what}</div>`).join("")}
+    </div>`).join("");
+  const seats = (report.seats || []).map((seat) =>
+    `<tr><td>${seat.character}</td><td>${seat.style}</td><td>${seat.model || "scripted"}</td>
+     <td>${seat.actions}</td><td>${seat.failures}</td><td>${seat.fallbacks}</td><td>${seat.truth}</td></tr>`).join("");
+  $("report").innerHTML += `
+    <div><span class="badge ${verdict}">${verdictText}</span>
+      <span class="muted"> · 完成 ${run.rounds_completed || 0} 回合 · ${(run.duration_seconds || 0).toFixed(1)}s
+      ${run.game_tokens ? " · DM token " + run.game_tokens : ""}</span></div>
+    <div class="hint">停止原因：${run.stop_reason || "—"} · 房间 ${run.room_code || "—"}</div>
+    <table>
+      <tr><th>地区</th><th>物品（发现/调查）</th><th>事件</th><th>真相（揭晓/作答）</th><th>时间推进</th></tr>
+      <tr><td>${regions.visited || 0}/${regions.total || 0}</td>
+          <td>${items.discovered || 0}/${items.total || 0}（${items.investigated || 0}）</td>
+          <td>${events.fired || 0}/${events.total || 0}</td>
+          <td>${truths.revealed || 0}/${truths.total || 0}（${truths.answered || 0}）</td>
+          <td>${time.elapsed_minutes || 0} 分钟</td></tr>
+    </table>
+    ${(regions.unvisited_names || []).length ? `<div class="hint">未访问地区：${regions.unvisited_names.join("、")}</div>` : ""}
+    ${(events.overdue || []).length ? `<div class="hint">已过时未触发的事件：${events.overdue.join("、")}</div>` : ""}
+    <h2 style="margin-top:14px">各座位提交的行动</h2>
+    ${(report.rounds || []).map((record) => `<div class="round"><b>第 ${record.number} 回合</b>
+      ${Object.entries(record.actions || {}).map(([who, what]) => `<div>· <b>${who}</b>：${what}</div>`).join("") || '<div class="muted">（本回合没有记录到行动）</div>'}
+    </div>`).join("") || '<div class="muted">没有行动记录。</div>'}
+    <h2 style="margin-top:14px">健康检查</h2>${issues}
+    <h2 style="margin-top:14px">座位</h2>
+    <table><tr><th>角色</th><th>风格</th><th>模型</th><th>行动</th><th>失败</th><th>兜底</th><th>真相</th></tr>${seats}</table>
+    <details open><summary>逐回合时间线（行动 + 结算）</summary>${rounds || '<div class="muted">没有完成的回合。</div>'}</details>
+    <details><summary>报告文件</summary><pre>${(state.report_paths || []).join("\\n") || "（未写盘）"}</pre>
+      <p><a href="/api/runs/${state.id}/report.md" target="_blank">在新标签打开 Markdown 报告</a></p></details>`;
+}
+
+restore();
+loadCards();
+</script>
+</body>
+</html>

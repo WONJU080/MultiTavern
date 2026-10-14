@@ -6,6 +6,7 @@ import logging
 from collections import deque
 from collections.abc import Callable
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from core.config import settings
@@ -17,6 +18,7 @@ from core.schemas import (
     PromptBlock,
     Region,
     RegionLink,
+    RoomPlugin,
     RoundResolution,
     SamplingConfig,
     ServerEvent,
@@ -247,8 +249,6 @@ def parse_regions(value: object) -> list[Region]:
                 link_entry.get("requires_item"), "link requires_item", 64
             )
             links.append(RegionLink(to=to, requires=requires, requires_item=requires_item))
-        if not isinstance(entry.get("private", False), bool):
-            raise ValueError(f"地区 '{region_id}': 'private' 必须是布尔值")
         regions.append(
             Region(
                 id=region_id,
@@ -256,7 +256,6 @@ def parse_regions(value: object) -> list[Region]:
                 arrival_text=clean_optional_text(entry.get("arrival_text"), "arrival text", 10_000),
                 items=items,
                 links=links,
-                private=bool(entry.get("private", False)),
             )
         )
     return regions
@@ -401,6 +400,120 @@ def parse_sampling(value: object) -> SamplingConfig:
         top_k=_bounded_int(value.get("top_k"), "sampling.top_k", None, 1_000_000),
         min_p=bounded_float("min_p", 0, 1),
         repetition_penalty=bounded_float("repetition_penalty", 0, 5),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ScenarioSetup:
+    """A validated scenario_init payload, shared by the server and offline tooling."""
+
+    scenario: str
+    guidance: str
+    opening: str
+    cast: list[Character]
+    time_config: TimeConfig
+    time_rules: list[TimeRule]
+    events: list[TimedEvent]
+    regions: list[Region]
+    items: list[Item]
+    start_region: str
+    lorebook: list[LorebookEntry]
+    prompt_blocks: list[PromptBlock]
+    sampling: SamplingConfig
+    plugins: list[RoomPlugin]
+    random_turn_order: bool
+    schedule: str
+    host_character: str
+
+
+def parse_scenario_setup(data: dict[str, object]) -> ScenarioSetup:
+    """Validate a scenario_init payload without touching engine state.
+
+    The engine calls this before its state lock and the offline playtest tool
+    calls it to pre-flight a scenario card, so both agree on what is playable.
+    Check order is part of the contract: earlier failures win.
+    """
+    scenario = clean_text(data.get("scenario"), "scenario", 500_000)
+    guidance = clean_optional_text(data.get("guidance"), "guidance", 500_000)
+    opening = clean_optional_text(data.get("opening"), "opening", 500_000)
+    cast = parse_cast(data.get("characters"))
+    time_config = parse_time_config(data.get("time_config"))
+    time_rules = parse_time_rules(data.get("time_rules"))
+    events = parse_events(data.get("events"))
+    if (
+        any(not event.region or event.when == "time" for event in events)
+        and not time_config.enabled
+    ):
+        raise ValueError("定时事件需要先启用游戏内时钟。")
+    regions = parse_regions(data.get("regions"))
+    items = parse_items(data.get("items"))
+    world = data.get("world")
+    start_region = ""
+    if world is not None:
+        if not isinstance(world, dict):
+            raise ValueError("'world' 必须是对象")
+        start_region = clean_optional_text(world.get("start_region"), "start_region", 64)
+    if regions:
+        region_ids = {region.id for region in regions}
+        item_ids = {item.id for item in items}
+        if not start_region:
+            start_region = regions[0].id
+        if start_region not in region_ids:
+            raise ValueError("world.start_region 不在 regions 中。")
+        for region in regions:
+            for item_id in region.items:
+                if item_id not in item_ids:
+                    raise ValueError(f"地区 '{region.id}' 引用了不存在的物品 '{item_id}'。")
+            for link in region.links:
+                if link.to not in region_ids:
+                    raise ValueError(f"地区 '{region.id}' 连接指向不存在的地区 '{link.to}'。")
+                if link.requires_item and link.requires_item not in item_ids:
+                    raise ValueError(f"地区 '{region.id}' 的连接要求不存在的物品。")
+        for event in events:
+            if event.region and event.region not in region_ids:
+                raise ValueError(f"事件 '{event.name}' 引用了不存在的地区 '{event.region}'。")
+    elif start_region:
+        raise ValueError("'world' 需要同时提供 'regions'。")
+    lorebook = parse_lorebook(data.get("lorebook"))
+    prompt_blocks = parse_prompt_blocks(data.get("prompt_blocks"))
+    sampling = parse_sampling(data.get("sampling"))
+    plugins = parse_plugins(data.get("plugins"))
+    random_turn_order = data.get("random_turn_order", True)
+    if not isinstance(random_turn_order, bool):
+        raise ValueError("'random_turn_order' 必须是布尔值")
+    schedule = data.get("schedule")
+    if schedule is None:
+        schedule = "strict" if regions else "round"
+    if schedule not in ("round", "strict"):
+        raise ValueError("'schedule' 必须是 'round' 或 'strict'")
+    if schedule == "round" and regions:
+        raise ValueError("地区系统需要 schedule='strict'。")
+    if schedule == "strict" and not time_config.enabled:
+        raise ValueError("严格时间轴调度需要先启用游戏内时钟。")
+    host_character = clean_optional_text(data.get("host_character"), "host_character", 40)
+    if host_character:
+        claimed = next((c for c in cast if c.name.casefold() == host_character.casefold()), None)
+        if claimed is None:
+            raise ValueError("房主选择的角色不在角色名单中。")
+        host_character = claimed.name
+    return ScenarioSetup(
+        scenario=scenario,
+        guidance=guidance,
+        opening=opening,
+        cast=cast,
+        time_config=time_config,
+        time_rules=time_rules,
+        events=events,
+        regions=regions,
+        items=items,
+        start_region=start_region,
+        lorebook=lorebook,
+        prompt_blocks=prompt_blocks,
+        sampling=sampling,
+        plugins=plugins,
+        random_turn_order=random_turn_order,
+        schedule=schedule,
+        host_character=host_character,
     )
 
 
@@ -755,71 +868,7 @@ class LobbyMixin:
         self: "GameEngine", client_id: str, data: dict[str, object]
     ) -> None:
         """Accept the host's scenario, cast of characters and optional own claim."""
-        scenario = clean_text(data.get("scenario"), "scenario", 500_000)
-        guidance = clean_optional_text(data.get("guidance"), "guidance", 500_000)
-        opening = clean_optional_text(data.get("opening"), "opening", 500_000)
-        cast = parse_cast(data.get("characters"))
-        time_config = parse_time_config(data.get("time_config"))
-        time_rules = parse_time_rules(data.get("time_rules"))
-        events = parse_events(data.get("events"))
-        if (
-            any(not event.region or event.when == "time" for event in events)
-            and not time_config.enabled
-        ):
-            raise ValueError("定时事件需要先启用游戏内时钟。")
-        regions = parse_regions(data.get("regions"))
-        items = parse_items(data.get("items"))
-        world = data.get("world")
-        start_region = ""
-        if world is not None:
-            if not isinstance(world, dict):
-                raise ValueError("'world' 必须是对象")
-            start_region = clean_optional_text(world.get("start_region"), "start_region", 64)
-        if regions:
-            region_ids = {region.id for region in regions}
-            item_ids = {item.id for item in items}
-            if not start_region:
-                start_region = regions[0].id
-            if start_region not in region_ids:
-                raise ValueError("world.start_region 不在 regions 中。")
-            for region in regions:
-                for item_id in region.items:
-                    if item_id not in item_ids:
-                        raise ValueError(f"地区 '{region.id}' 引用了不存在的物品 '{item_id}'。")
-                for link in region.links:
-                    if link.to not in region_ids:
-                        raise ValueError(f"地区 '{region.id}' 连接指向不存在的地区 '{link.to}'。")
-                    if link.requires_item and link.requires_item not in item_ids:
-                        raise ValueError(f"地区 '{region.id}' 的连接要求不存在的物品。")
-            for event in events:
-                if event.region and event.region not in region_ids:
-                    raise ValueError(f"事件 '{event.name}' 引用了不存在的地区 '{event.region}'。")
-        elif start_region:
-            raise ValueError("'world' 需要同时提供 'regions'。")
-        lorebook = parse_lorebook(data.get("lorebook"))
-        prompt_blocks = parse_prompt_blocks(data.get("prompt_blocks"))
-        sampling = parse_sampling(data.get("sampling"))
-        plugins = parse_plugins(data.get("plugins"))
-        random_turn_order = data.get("random_turn_order", True)
-        if not isinstance(random_turn_order, bool):
-            raise ValueError("'random_turn_order' 必须是布尔值")
-        schedule = data.get("schedule")
-        if schedule is None:
-            schedule = "strict" if regions else "round"
-        if schedule not in ("round", "strict"):
-            raise ValueError("'schedule' 必须是 'round' 或 'strict'")
-        if schedule == "round" and regions:
-            raise ValueError("地区系统需要 schedule='strict'。")
-        if schedule == "strict" and not time_config.enabled:
-            raise ValueError("严格时间轴调度需要先启用游戏内时钟。")
-        host_character = clean_optional_text(data.get("host_character"), "host_character", 40)
-        if host_character:
-            claimed = next(
-                (c for c in cast if c.name.casefold() == host_character.casefold()), None
-            )
-            if claimed is None:
-                raise ValueError("房主选择的角色不在角色名单中。")
-            host_character = claimed.name
+        setup = parse_scenario_setup(data)
         async with self.lock:
             if not CURRENT_OWNER.get()():
                 return
@@ -829,31 +878,31 @@ class LobbyMixin:
             if self.state not in {GameState.SCENARIO_INJECTION, GameState.AWAITING_PLAYERS}:
                 raise ValueError("当前状态下无法修改剧情。")
             previous_claims = dict(self.claims)
-            self.cast = cast
-            self.fixed_opening = opening
-            self.timed_events = events
+            self.cast = list(setup.cast)
+            self.fixed_opening = setup.opening
+            self.timed_events = list(setup.events)
             self.fired_events = set()
             self.event_log = []
             self.pending_event_injections = []
-            self.lorebook = lorebook
-            self.prompt_blocks = prompt_blocks
-            self.sampling = sampling
-            self.plugins = plugins
+            self.lorebook = list(setup.lorebook)
+            self.prompt_blocks = list(setup.prompt_blocks)
+            self.sampling = setup.sampling
+            self.plugins = list(setup.plugins)
             self.truth_revealed = set()
             self.truth_answers = {}
             self.truth_used_round = {}
             self.truth_pending = set()
-            self.random_turn_order = random_turn_order
-            self.schedule_mode = schedule
-            self.regions = {region.id: region for region in regions}
-            self.items = {item.id: item for item in items}
-            self.world_start_region = start_region
+            self.random_turn_order = setup.random_turn_order
+            self.schedule_mode = setup.schedule
+            self.regions = {region.id: region for region in setup.regions}
+            self.items = {item.id: item for item in setup.items}
+            self.world_start_region = setup.start_region
             self.region_of = {}
             self.visited_regions = set()
             self.region_flags = set()
-            self.item_location = {item.id: item.region for item in items if item.region}
+            self.item_location = {item.id: item.region for item in setup.items if item.region}
             self.investigated_items = set()
-            new_names = {char.name for char in cast}
+            new_names = {char.name for char in setup.cast}
             # Editing before the start keeps claims that still exist and releases
             # the rest; the host's own claim is reassigned explicitly below.
             self.claims = {
@@ -864,9 +913,9 @@ class LobbyMixin:
             for member in self.players.values():
                 if member.character_name not in new_names:
                     member.character_name = None
-            if host_character:
-                self.claims[host_character] = player.name
-                player.character_name = host_character
+            if setup.host_character:
+                self.claims[setup.host_character] = player.name
+                player.character_name = setup.host_character
             else:
                 # A host without a claim observes the game and never acts.
                 player.character_name = None
@@ -875,14 +924,14 @@ class LobbyMixin:
                 lambda epoch: self._prepare_scenario(
                     epoch,
                     client_id,
-                    scenario,
-                    guidance,
-                    cast,
-                    time_config,
-                    time_rules,
-                    lorebook,
-                    prompt_blocks,
-                    sampling,
+                    setup.scenario,
+                    setup.guidance,
+                    setup.cast,
+                    setup.time_config,
+                    setup.time_rules,
+                    setup.lorebook,
+                    setup.prompt_blocks,
+                    setup.sampling,
                 ),
                 failure_state,
             )

@@ -1,0 +1,51 @@
+# Anyworld 剧情卡跑测配置
+# M1：供 `python -m playtest validate --config playtest/configs/example.yaml` 交叉检查。
+# run 子命令（真实多座位试玩）在 M2 接入，字段先按最终形态固定下来。
+
+server:
+  url: "https://127.0.0.1:4141" # 运行中的 anyworld 服务器
+  verify_tls: false # 自签证书默认跳过校验
+  proxy: false # 是否经系统/环境代理连接；默认直连（本机地址始终直连）
+
+# 房间 DM 的凭据：borrow = 借用服务器 llm.api_key；own = 房主自带 Key
+dm:
+  mode: borrow
+  # mode: own
+  # endpoint: "https://api.deepseek.com/v1"
+  # api_key_env: DEEPSEEK_API_KEY   # 推荐：从环境变量读 Key，不写进文件
+  # api_key: "sk-..."               # 也可以直接写（不推荐）
+  # provider: compatible            # compatible | openai
+  # model_name: deepseek-chat
+
+card: "examples/your-card.anyworld.json" # 换成你自己的剧情卡（也可用 --cards 指定目录批量体检）
+
+seats:
+  # 所有座位的默认 LLM；每个角色一个座位，可各自不同厂商/模型/温度
+  default:
+    endpoint: "https://api.deepseek.com/v1"
+    api_key_env: DEEPSEEK_API_KEY
+    model_name: deepseek-chat
+    temperature: 1.0
+    max_output_tokens: 800 # 单次输出 token 上限（行动很短，这里只是封顶）
+    action_limit: 80 # 行动字数硬上限；提示词会让它尽量 40 字以内 # 行动字数硬上限；提示词会让它尽量 40 字以内
+    style: rotate # explore / social / bold / cautious / orderly / rotate
+    # proxy: 留空 = 本机/内网 endpoint 直连、公网走系统代理；true = 总是走代理；false = 总是直连
+  # 按角色名覆盖；未列出的角色使用 default
+  overrides:
+    孔繁声:
+      model_name: deepseek-reasoner
+      temperature: 1.2
+      style: bold
+
+run:
+  max_rounds: 6 # 撞到上限即停止并记为“未达结局”
+  max_minutes: 30 # 墙钟预算
+  max_total_tokens: null # DM 侧累计 token 上限，null = 不限
+  seat_timeout_seconds: 60 # 单次座位调用超时
+  max_round_retries: 2 # DM 结算失败时，房主自动重试本回合的次数
+  stall_seconds: 180 # 无进展看门狗
+  dry_run: false # true = 座位用脚本化行动，不调用座位 LLM
+
+report:
+  out_dir: "playtest-runs"
+  formats: ["json", "markdown"]
