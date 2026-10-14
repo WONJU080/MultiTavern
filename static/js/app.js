@@ -820,6 +820,9 @@ function renderMap() {
                                 label.className = "map-item-name";
                                 label.textContent = item.name;
                                 line.appendChild(label);
+                                if (item.key_item) {
+                                    line.appendChild(mapChip("关键", "key"));
+                                }
                                 if (item.clue) {
                                     line.appendChild(mapChip("线索", "clue"));
                                 }
@@ -920,6 +923,9 @@ function renderCodex() {
             name.textContent = item.name;
             card.appendChild(name);
             const tags = [];
+            if (item.key_item) {
+                tags.push("关键物品");
+            }
             if (item.clue) {
                 tags.push("线索");
             }
@@ -978,7 +984,9 @@ function renderCodex() {
             }
             const desc = document.createElement("p");
             desc.className = "map-item-summary";
-            desc.textContent = event.description;
+            // The server blanks the description of a non-public event: players learn
+            // only that it happened, and where.
+            desc.textContent = event.description || "（该事件的具体内容未公开）";
             card.appendChild(desc);
             eventsSection.appendChild(card);
         });
@@ -2407,7 +2415,6 @@ function makeRegionRow(region = {}) {
         configInput("region-name", 80, "名称", region.name || ""),
         configInput("region-items", 400, "物品id，逗号分隔", (region.items || []).join(", ")),
         configInput("region-links", 400, "连接：目标id 或 目标id>物品id", linkText),
-        configCheck("region-private", "private", region.private === true),
         configTextarea("region-arrival", "到达固定文本", region.arrival_text || ""),
         configRemove(row),
     );
@@ -2424,7 +2431,7 @@ function makeItemRow(item = {}) {
         configInput("item-region", 64, "所属地区id", item.region || ""),
         configInput("item-summary", 2000, "简述", item.summary || ""),
         configCheck("item-clue", "线索", item.clue === true),
-        configCheck("item-key", "关键", item.key_item === true),
+        configCheck("item-key", "关键物品", item.key_item === true),
         configCheck("item-carryable", "可携带", item.carryable !== false),
         configTextarea("item-investigate", "调查后的固定文本", item.investigate_text || ""),
         configRemove(row),
@@ -2448,7 +2455,6 @@ function collectRegions() {
                 }
                 return link;
             }),
-            private: row.querySelector(".region-private input").checked,
         }))
         .filter((region) => region.id && region.name);
 }

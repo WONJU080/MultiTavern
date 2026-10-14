@@ -158,7 +158,6 @@ class Region(StrictModel):
     arrival_text: str = ""
     items: list[str] = Field(default_factory=list)
     links: list[RegionLink] = Field(default_factory=list)
-    private: bool = False
 
 
 class Item(StrictModel):

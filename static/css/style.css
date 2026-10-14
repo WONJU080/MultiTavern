@@ -1185,6 +1185,13 @@ button:disabled {
     border-color: var(--accent);
     color: var(--accent-bright);
 }
+/* A host-declared key item: visually distinct from an ordinary clue. */
+.map-chip.key {
+    border-color: var(--action-accent);
+    background: rgb(221 183 128 / 12%);
+    color: var(--action-accent);
+    font-weight: 600;
+}
 .map-chip.locked {
     border-style: dashed;
     color: var(--muted);
