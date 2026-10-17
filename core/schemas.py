@@ -294,6 +294,7 @@ class ActionReview(StrictModel):
     plan_id: str | None = None
     move_to: str | None = None
     take_item: str | None = None
+    scan_region: bool = False
 
 
 class ScenarioTitle(StrictModel):

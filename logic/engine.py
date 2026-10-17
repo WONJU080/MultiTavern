@@ -869,6 +869,7 @@ class GameEngine(LobbyMixin):
                 contract = self._apply_action_contract_locked(character, action, roster, verdict)
                 duration = contract["duration"]
                 player = self.players[client_id]
+                scan_scene = self._scan_payload_locked(character) if contract["scan"] else None
                 self.round_buffer[client_id] = action
                 if duration is not None:
                     self.round_durations[client_id] = duration
@@ -892,6 +893,10 @@ class GameEngine(LobbyMixin):
                 duration,
             )
             await self.sender.broadcast_global(action_event)
+            if scan_scene is not None:
+                await self.sender.send_personal(
+                    client_id, ServerEvent(type="scene_text", payload=scan_scene)
+                )
             if directive is not None:
                 await self.sender.broadcast_global(directive)
 
@@ -925,6 +930,7 @@ class GameEngine(LobbyMixin):
                     "take_item": contract["take_item"],
                     "investigate": contract["investigate"],
                 }
+                scan_scene = self._scan_payload_locked(character) if contract["scan"] else None
                 self.window.discard(client_id)
                 self.holds.discard(client_id)
                 player = self.players[client_id]
@@ -949,6 +955,10 @@ class GameEngine(LobbyMixin):
                 now + duration,
             )
             await self.sender.broadcast_global(action_event)
+            if scan_scene is not None:
+                await self.sender.send_personal(
+                    client_id, ServerEvent(type="scene_text", payload=scan_scene)
+                )
             for event in events:
                 await self.sender.broadcast_global(event)
 
@@ -1489,6 +1499,7 @@ class GameEngine(LobbyMixin):
             event_context = "\n".join(
                 part
                 for part in (
+                    self._world_state_prompt_locked(llm_actions),
                     "\n\n".join(self.pending_event_injections),
                     (
                         "[SYSTEM 这些行动仍在进行中，结果尚未落定：]\n" + "\n".join(inflight_notes)
@@ -1509,6 +1520,7 @@ class GameEngine(LobbyMixin):
                 )
                 if part
             )
+            round_context = self._round_context_snapshot_locked(llm_actions)
             plan_dice = getattr(self.resolver, "plan_dice", None)
         if not llm_actions:
             resolution = None
@@ -1529,6 +1541,7 @@ class GameEngine(LobbyMixin):
                 )
                 hidden = set(plan.hidden_rolls)
                 dice = {name: roll_d100() for name, required in plan.rolls.items() if required}
+            self._publish_round_context(round_context)
             if plan_dice is None:
                 resolution = await self.resolver.generate_resolution(
                     llm_actions,
@@ -1677,12 +1690,51 @@ class GameEngine(LobbyMixin):
             await self._announce_truth_reveals(truth_reveals)
             await self._publish_usage()
 
-    def _world_context_locked(self, character: str) -> str:
-        """Render the acting character's structured world context for classification."""
+    def _scan_text_locked(self, character: str) -> dict | None:
+        """List what can be examined here without revealing any fixed clue text."""
         if not self.regions:
-            return self.current_scenario_state or ""
+            return None
+        region_id = self.region_of.get(character, self.world_start_region)
+        region = self.regions.get(region_id)
+        if region is None:
+            return None
+        lines: list[str] = []
+        for item_id in region.items:
+            item = self.items.get(item_id)
+            if item is None or self.item_location.get(item_id) != region_id:
+                continue
+            marks: list[str] = []
+            if item.key_item:
+                marks.append("关键物品")
+            if item.id in self.investigated_items:
+                marks.append("已调查")
+            elif item.clue:
+                marks.append("线索")
+            label = item.name + ("（" + "·".join(marks) + "）" if marks else "")
+            lines.append(f"· {label}：{item.summary}" if item.summary else f"· {label}")
+        if lines:
+            text = "你环视四周，这里能细看的有：\n" + "\n".join(lines) + "\n（点名查看其中一件。）"
+        else:
+            text = "你环视四周，这里没有能细看的东西。"
+        return {"text": text, "region": region_id, "character": character, "kind": "scan"}
+
+    def _scan_payload_locked(self, character: str) -> dict | None:
+        """Build a scan reply and tell the narrator not to invent beyond it."""
+        scene = self._scan_text_locked(character)
+        if scene is None:
+            return None
+        self.pending_event_injections.append(
+            "[SYSTEM 本轮玩家只在这个地区环视了一圈，系统已原样下发可查看的物件清单；"
+            "不要新增清单之外的物件或线索，也不要替玩家得出调查结论。\n" + scene["text"] + "]"
+        )
+        return scene
+
+    def _world_context_locked(self, character: str, *, include_state: bool = True) -> str:
+        """Render the acting character's structured world context."""
+        if not self.regions:
+            return self.current_scenario_state if include_state else ""
         parts: list[str] = []
-        if self.current_scenario_state:
+        if include_state and self.current_scenario_state:
             parts.append(self.current_scenario_state)
         region_id = self.region_of.get(character, self.world_start_region)
         region = self.regions.get(region_id)
@@ -1718,6 +1770,99 @@ class GameEngine(LobbyMixin):
         if carried:
             parts.append("携带物品：" + "、".join(carried))
         return "\n".join(parts)
+
+    def _world_state_prompt_locked(self, characters: dict[str, str]) -> str:
+        """Render authoritative world facts for the resolving model.
+
+        The classification prompt already sees this; the narrator did not, which is
+        how prose drifted onto objects the world never defined.
+        """
+        if not self.regions and not self.items:
+            return ""
+        lines = ["【世界状态｜权威事实，叙述不得与之矛盾】"]
+        for name in characters:
+            context = self._world_context_locked(name, include_state=False)
+            if context:
+                lines.append(f"{name}：\n{context}")
+        if self.items:
+            lines.append(
+                "【物品目录｜可以提及，但只有所在地区或携带的物品才能被调查或取得】"
+                + "、".join(self._item_label_locked(item_id) for item_id in self.items)
+            )
+        if self.regions:
+            lines.append(
+                "【地区】"
+                + "、".join(
+                    f"{region.name}（{region_id}）" for region_id, region in self.regions.items()
+                )
+            )
+        return "\n".join(line for line in lines if line)
+
+    def _world_grounding_payload(self) -> dict[str, object]:
+        """Collect every host-authored fact that can legitimately ground an object."""
+        corpus: list[str] = [
+            self.original_scenario or "",
+            self.fixed_opening or "",
+            self.opening_scenario or "",
+            self.private_guidance or "",
+        ]
+        for character in self.cast:
+            for field in ("name", "description", "personality", "style", "example_dialogue"):
+                value = getattr(character, field, "")
+                if value:
+                    corpus.append(str(value))
+        for entry in self.lorebook:
+            corpus.extend([entry.title or "", " ".join(entry.keys), entry.content])
+        for item in self.items.values():
+            corpus.extend([item.name, item.summary or "", item.investigate_text or ""])
+        for region_id, region in self.regions.items():
+            corpus.extend([region.name, region.arrival_text or ""])
+            state = self.region_state.get(region_id)
+            if state:
+                corpus.append(state)
+        return {
+            "items": [(item_id, item.name) for item_id, item in self.items.items()],
+            "regions": [(region_id, region.name) for region_id, region in self.regions.items()],
+            "corpus": "\n".join(part for part in corpus if part),
+            "clues": [
+                (item.id, item.name, item.investigate_text or "") for item in self.items.values()
+            ],
+        }
+
+    def _round_context_snapshot_locked(
+        self, characters: dict[str, str]
+    ) -> tuple[list[str], dict[str, str]]:
+        """Snapshot the investigated set and where each character will stand."""
+        positions: dict[str, str] = {}
+        if self.schedule_mode == "strict" and self.regions:
+            pending_moves = {
+                str(entry.get("character")): entry.get("move_to")
+                for entry in self.inflight.values()
+            }
+            for name in characters:
+                destination = pending_moves.get(name)
+                region_id = (
+                    destination
+                    if isinstance(destination, str) and destination in self.regions
+                    else self.region_of.get(name, self.world_start_region)
+                )
+                region = self.regions.get(region_id)
+                if region is not None:
+                    positions[name] = region.name
+        return sorted(self.investigated_items), positions
+
+    def _publish_round_context(self, context: tuple[list[str], dict[str, str]] | None) -> None:
+        """Tell the resolver what this round is anchored to, when it listens."""
+        setter = getattr(self.resolver, "set_round_context", None)
+        if setter is not None and context is not None:
+            setter(investigated=context[0], positions=context[1])
+
+    def sync_world_grounding(self) -> None:
+        """Publish the room's object catalogue to the resolver, when it supports it."""
+        setter = getattr(self.resolver, "set_world_grounding", None)
+        if setter is None:
+            return
+        setter(**self._world_grounding_payload())
 
     def _item_label_locked(self, item_id: str) -> str:
         """Render one item for prompts, marking host-declared key items.
@@ -1757,6 +1902,20 @@ class GameEngine(LobbyMixin):
             # A review outage must not block play; only a returned verdict rejects.
             LOGGER.exception("Action review failed room=%s", self.room_code)
             return None
+
+    @staticmethod
+    def _action_names_object(action: str, name: str) -> bool:
+        """Whether the player's own words refer to this object.
+
+        Matching the full registered name is too strict (players say 祭坛 for
+        石祭坛), so any two-character fragment also counts. Refusals only happen
+        when the player really named the thing.
+        """
+        if not name or not action:
+            return False
+        if name in action:
+            return True
+        return any(name[index : index + 2] in action for index in range(len(name) - 1))
 
     def _canonical_roster_name(self, name: object, roster: list[str]) -> str | None:
         """Map a model-supplied name to the canonical roster spelling."""
@@ -1799,6 +1958,7 @@ class GameEngine(LobbyMixin):
         ]
         response_to_raw = proposal_to_raw = matched_rule = plan_id = None
         move_to_raw = take_item_raw = referenced_item_raw = None
+        scan_region = False
         instant_comm = True
         duration = None
         response = None
@@ -1814,6 +1974,7 @@ class GameEngine(LobbyMixin):
             move_to_raw = getattr(verdict, "move_to", None)
             take_item_raw = getattr(verdict, "take_item", None)
             referenced_item_raw = getattr(verdict, "referenced_item", None)
+            scan_region = bool(getattr(verdict, "scan_region", False))
             kind = getattr(verdict, "kind", None)
         response_to = self._canonical_roster_name(response_to_raw, roster)
         proposal_to = self._canonical_roster_name(proposal_to_raw, roster)
@@ -1893,21 +2054,38 @@ class GameEngine(LobbyMixin):
                 target = self._canonical_roster_name(move_to_raw, list(self.regions))
                 if target is None:
                     raise ValueError("没有这个地区。")
-                region = self.regions.get(current_region) if current_region else None
-                link = (
-                    next((item for item in region.links if item.to == target), None)
-                    if region is not None
-                    else None
-                )
-                if link is None:
-                    raise ValueError("无法从这里直接前往该地区。")
-                if link.requires_item:
-                    holder = self.item_location.get(link.requires_item)
-                    if holder != character:
-                        item = self.items.get(link.requires_item)
-                        name = item.name if item is not None else link.requires_item
-                        raise ValueError(f"前往该地区需要携带：{name}。")
-                move_to = target
+                if target == current_region:
+                    # Asking to go where you already are is not a failed move.
+                    move_to = None
+                else:
+                    region = self.regions.get(current_region) if current_region else None
+                    link = (
+                        next((item for item in region.links if item.to == target), None)
+                        if region is not None
+                        else None
+                    )
+                    if link is None:
+                        here = self.regions.get(current_region) if current_region else None
+                        target_name = self.regions[target].name
+                        where = here.name if here is not None else "这里"
+                        exits = [
+                            self.regions[step.to].name
+                            for step in (here.links if here is not None else [])
+                            if step.to in self.regions
+                        ]
+                        if exits:
+                            raise ValueError(
+                                f"「{where}」不能直接前往「{target_name}」；"
+                                "可先前往：" + "、".join(exits) + "。"
+                            )
+                        raise ValueError(f"「{where}」不能直接前往「{target_name}」。")
+                    if link.requires_item:
+                        holder = self.item_location.get(link.requires_item)
+                        if holder != character:
+                            item = self.items.get(link.requires_item)
+                            name = item.name if item is not None else link.requires_item
+                            raise ValueError(f"前往该地区需要携带：{name}。")
+                    move_to = target
             if take_item_raw:
                 target = self._canonical_roster_name(take_item_raw, list(self.items))
                 if target is None or self.item_location.get(target) != current_region:
@@ -1918,16 +2096,32 @@ class GameEngine(LobbyMixin):
                 take_item = target
             if referenced_item_raw:
                 target = self._canonical_roster_name(referenced_item_raw, list(self.items))
-                if target is not None and self.item_location.get(target) in (
-                    current_region,
-                    character,
-                ):
-                    investigate = target
+                if target is not None:
+                    location = self.item_location.get(target)
+                    if location in (current_region, character):
+                        investigate = target
+                    else:
+                        item = self.items.get(target)
+                        name = item.name if item is not None else target
+                        # Only refuse when the player actually named the object: the
+                        # review model must not invent a refusal out of a vague input.
+                        if self._action_names_object(action, name):
+                            raise ValueError(f"「{name}」不在你附近，无法调查。")
         value = None if duration is None else max(0, int(duration))
         if value is not None and matched_rule:
             rule = next((item for item in self.time_rules if item.activity == matched_rule), None)
             if rule is not None:
                 value = max(rule.minutes_min, min(rule.minutes_max, value))
+        LOGGER.info(
+            "Action contract character=%s move=%s referenced_region=%s take=%s "
+            "investigate=%s scan=%s",
+            character,
+            move_to,
+            referenced_item_raw,
+            take_item,
+            investigate,
+            scan_region,
+        )
         self.action_reviews[character] = {
             "kind": str(kind) if kind else "self",
             "targets": sorted(
@@ -1946,6 +2140,8 @@ class GameEngine(LobbyMixin):
             "move_to": move_to,
             "take_item": take_item,
             "investigate": investigate,
+            # A named object wins over a general look around.
+            "scan": scan_region and investigate is None,
         }
 
     def _reviewed_actions_locked(
@@ -2242,13 +2438,27 @@ class GameEngine(LobbyMixin):
                 or self.players[item].return_pending
                 or self.players[item].handover_pending
             }
+            characters = {
+                self.players[cid].character_name or self.players[cid].name: ""
+                for cid in actions
+                if cid in self.players
+            }
+            event_context = "\n".join(
+                part
+                for part in (
+                    self._world_state_prompt_locked(characters),
+                    "\n\n".join(self.pending_event_injections),
+                )
+                if part
+            )
             self.pending_resolution = {
                 "actions": actions,
                 "participants": participants,
                 "dice": None,
                 "hidden": set(),
                 "previous_state": self.current_scenario_state or "",
-                "event_context": "\n\n".join(self.pending_event_injections),
+                "event_context": event_context,
+                "round_context": self._round_context_snapshot_locked(characters),
                 "truth_context": self._truth_context(),
                 # Frozen while the lock is held; read later without it.
                 "action_reviews": self._reviewed_actions_locked(tuple(actions)),
@@ -2354,6 +2564,7 @@ class GameEngine(LobbyMixin):
                     ensure_ascii=True,
                 ),
             )
+        self._publish_round_context(pending.get("round_context"))
         if plan_dice is None:
             resolution = await self.resolver.generate_resolution(
                 llm_actions,
@@ -2832,6 +3043,7 @@ def restore_engine(
     restore_resolver = getattr(engine.resolver, "restore_from_persistent_dict", None)
     if restore_resolver is not None:
         restore_resolver(data.get("resolver") or {})
+    engine.sync_world_grounding()
     set_lorebook = getattr(engine.resolver, "set_lorebook", None)
     if set_lorebook is not None:
         set_lorebook(engine.lorebook)

@@ -964,6 +964,7 @@ class LobbyMixin:
         set_sampling = getattr(self.resolver, "set_sampling", None)
         if set_sampling is not None:
             set_sampling(sampling)
+        self.sync_world_grounding()
         LOGGER.info(
             "Scenario config applied blocks=%d sampling=%s",
             sum(1 for block in prompt_blocks if block.enabled),

@@ -520,3 +520,194 @@ def test_key_item_flag_survives_persistence(tmp_path: Path) -> None:
         await restored.shutdown()
 
     asyncio.run(run())
+
+
+def test_world_state_reaches_the_resolver(tmp_path: Path) -> None:
+    """The resolving model receives the authoritative inventory, not just prose."""
+
+    async def run() -> None:
+        engine, sender, resolver = await build_world(tmp_path)
+        resolver.review_results = [ActionReview(valid=True, duration_minutes=5)]
+        await engine.process_payload("host", payload("action", action="四处看看"))
+        await engine.process_payload("p1", payload("hold"))
+        await settle(engine)
+        context = resolver.event_context
+        assert "世界状态" in context
+        assert "物品目录" in context
+        assert "铜钥匙" in context
+        assert "营地" in context
+
+    asyncio.run(run())
+
+
+def test_investigating_an_absent_item_is_refused(tmp_path: Path) -> None:
+    """Naming an object that is not here is a visible error, not silent invention."""
+
+    async def run() -> None:
+        engine, sender, resolver = await build_world(tmp_path)
+        assert engine.region_of["Host"] == "camp"
+        resolver.review_results = [
+            ActionReview(valid=True, referenced_item="altar", duration_minutes=10)
+        ]
+        await engine.process_payload("host", payload("action", action="检查祭坛"))
+        assert (
+            sender.events_of_type("error")[-1].payload["msg"] == "「石祭坛」不在你附近，无法调查。"
+        )
+        assert "altar" not in engine.investigated_items
+
+    asyncio.run(run())
+
+
+def test_a_vague_action_never_triggers_an_absent_item_refusal(tmp_path: Path) -> None:
+    """A referee guess about a vaguely worded action must not reject the input."""
+
+    async def run() -> None:
+        engine, sender, resolver = await build_world(tmp_path)
+        resolver.review_results = [
+            ActionReview(valid=True, referenced_item="altar", duration_minutes=10)
+        ]
+        await engine.process_payload("host", payload("action", action="在营地四处看看"))
+        assert not sender.events_of_type("error")
+        assert "altar" not in engine.investigated_items
+
+    asyncio.run(run())
+
+
+def test_scan_lists_the_room_without_revealing_clues(tmp_path: Path) -> None:
+    """A room-level look-around returns object names, never fixed clue text."""
+
+    async def run() -> None:
+        engine, sender, resolver = await build_world(tmp_path)
+        resolver.review_results = [ActionReview(valid=True, scan_region=True)]
+        await engine.process_payload("host", payload("action", action="环顾四周"))
+        scenes = [e for e in sender.events_of_type("scene_text") if e.payload.get("kind") == "scan"]
+        assert scenes, "扫描应当立刻回一条 scene_text"
+        text = scenes[-1].payload["text"]
+        assert "铜钥匙" in text
+        assert "一把旧钥匙" in text
+        assert "钥匙上刻着洞窟的记号" not in text
+        assert "key" not in engine.investigated_items
+
+    asyncio.run(run())
+
+
+def test_scan_needs_no_particular_wording(tmp_path: Path) -> None:
+    """The room scan is driven by the referee's intent flag, not by phrases."""
+
+    async def run() -> None:
+        engine, sender, resolver = await build_world(tmp_path)
+        resolver.review_results = [ActionReview(valid=True, scan_region=True)]
+        await engine.process_payload(
+            "host", payload("action", action="我在屋子里转了一圈，看看有没有什么值得留意")
+        )
+        scenes = [e for e in sender.events_of_type("scene_text") if e.payload.get("kind") == "scan"]
+        assert scenes
+        assert "铜钥匙" in scenes[-1].payload["text"]
+
+    asyncio.run(run())
+
+
+def test_scan_reports_an_empty_room(tmp_path: Path) -> None:
+    """With nothing present the scan says so instead of inventing a find."""
+
+    async def run() -> None:
+        engine, sender, resolver = await build_world(tmp_path)
+        engine.item_location["key"] = "Host"
+        resolver.review_results = [ActionReview(valid=True, scan_region=True)]
+        await engine.process_payload("host", payload("action", action="四下看看"))
+        scenes = [e for e in sender.events_of_type("scene_text") if e.payload.get("kind") == "scan"]
+        assert scenes
+        assert "没有能细看的东西" in scenes[-1].payload["text"]
+
+    asyncio.run(run())
+
+
+def test_naming_an_object_beats_a_room_scan(tmp_path: Path) -> None:
+    """Investigating a named item must not turn into a generic scan."""
+
+    async def run() -> None:
+        engine, sender, resolver = await build_world(tmp_path)
+        resolver.review_results = [
+            ActionReview(valid=True, referenced_item="key", scan_region=True)
+        ]
+        await engine.process_payload("host", payload("action", action="调查铜钥匙"))
+        await engine.process_payload("p1", payload("hold"))
+        await settle(engine)
+        scans = [e for e in sender.events_of_type("scene_text") if e.payload.get("kind") == "scan"]
+        assert not scans
+        assert "key" in engine.investigated_items
+
+    asyncio.run(run())
+
+
+def test_moving_to_a_distant_region_names_the_next_step(tmp_path: Path) -> None:
+    """Asking for a region two links away explains the route instead of failing mute."""
+
+    async def run() -> None:
+        sender = FakeSender()
+        resolver = FakeResolver()
+        engine = GameEngine(sender, resolver)
+        engine.transcript = GameTranscript(tmp_path / "logs")
+        await engine.host_join("host", {"name": "Host"})
+        await engine.process_payload(
+            "host",
+            payload(
+                "scenario_init",
+                scenario="A camp, a ridge and a cave.",
+                characters=[{"name": "Host"}, {"name": "Player"}],
+                host_character="Host",
+                time_config=TIME_CONFIG,
+                regions=[
+                    {
+                        "id": "camp",
+                        "name": "营地",
+                        "arrival_text": "营地。",
+                        "items": [],
+                        "links": [{"to": "ridge"}],
+                    },
+                    {
+                        "id": "ridge",
+                        "name": "山脊",
+                        "arrival_text": "山脊。",
+                        "items": [],
+                        "links": [{"to": "camp"}, {"to": "cave"}],
+                    },
+                    {
+                        "id": "cave",
+                        "name": "洞窟",
+                        "arrival_text": "洞窟。",
+                        "items": [],
+                        "links": [{"to": "ridge"}],
+                    },
+                ],
+                items=[],
+                world={"start_region": "camp"},
+            ),
+        )
+        await engine.wait_for_inference()
+        await engine.player_join("p1", {"name": "Player", "character": "Player"})
+        await engine.process_payload("host", payload("start_game"))
+        await engine.wait_for_inference()
+        await settle(engine)
+
+        resolver.review_results = [ActionReview(valid=True, move_to="cave", duration_minutes=30)]
+        await engine.process_payload("host", payload("action", action="去洞窟"))
+        message = sender.events_of_type("error")[-1].payload["msg"]
+        assert "「营地」不能直接前往「洞窟」" in message
+        assert "山脊" in message
+        assert engine.region_of["Host"] == "camp"
+
+    asyncio.run(run())
+
+
+def test_asking_for_the_current_region_is_not_an_error(tmp_path: Path) -> None:
+    """'Go here' while already here must not raise a movement error."""
+
+    async def run() -> None:
+        engine, sender, resolver = await build_world(tmp_path)
+        resolver.review_results = [ActionReview(valid=True, move_to="camp", duration_minutes=5)]
+        await engine.process_payload("host", payload("action", action="回营地"))
+        assert not sender.events_of_type("error")
+        assert engine.region_of["Host"] == "camp"
+
+    asyncio.run(run())

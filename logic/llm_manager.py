@@ -170,6 +170,13 @@ class LLMContextManager:
         self.memory: dict[str, str] | None = None
         self.private_guidance = ""
         self.lorebook: list[Any] = []
+        self._ground_item_names: tuple[str, ...] = ()
+        self._ground_region_ids: set[str] = set()
+        self._ground_corpus = ""
+        self._ground_region_names: tuple[str, ...] = ()
+        self._ground_clues: dict[str, tuple[str, str]] = {}
+        self._round_investigated: set[str] = set()
+        self._round_positions: dict[str, str] = {}
         self.prompt_blocks: list[Any] = []
         self.sampling_options: dict[str, float] = {}
         self.sampling_extra: dict[str, float | int] = {}
@@ -302,6 +309,39 @@ class LLMContextManager:
                 "Public opening narrative (already shown verbatim to the players; treat it "
                 "as established and never rewrite it):\n" + text
             ),
+        }
+
+    def set_world_grounding(
+        self,
+        items: object = (),
+        regions: object = (),
+        corpus: str = "",
+        clues: object = (),
+    ) -> None:
+        """Record the room's authoritative objects so narration can be checked."""
+        pairs = list(items) if isinstance(items, (list, tuple)) else []
+        region_pairs = list(regions) if isinstance(regions, (list, tuple)) else []
+        self._ground_item_names = tuple(sorted({str(name) for _, name in pairs if name}))
+        self._ground_item_ids = {str(item_id) for item_id, _ in pairs}
+        self._ground_region_ids = {str(region_id) for region_id, _ in region_pairs}
+        self._ground_region_names = tuple(sorted({str(name) for _, name in region_pairs if name}))
+        self._ground_corpus = str(corpus or "").casefold()
+        entries = list(clues) if isinstance(clues, (list, tuple)) else []
+        self._ground_clues = {
+            str(item_id): (str(name or ""), str(text or ""))
+            for item_id, name, text in entries
+            if text
+        }
+
+    def set_round_context(
+        self,
+        investigated: object = (),
+        positions: dict[str, str] | None = None,
+    ) -> None:
+        """Record the state this round is resolved against."""
+        self._round_investigated = {str(item_id) for item_id in investigated or ()}
+        self._round_positions = {
+            str(name): str(region) for name, region in (positions or {}).items()
         }
 
     def set_lorebook(self, entries: list[Any]) -> None:
@@ -617,10 +657,21 @@ class LLMContextManager:
                 + json.dumps(sorted(hidden_rolls), ensure_ascii=False)
                 + ". Narrate only observable in-world consequences."
             )
+        world_rules = ""
+        if self._ground_item_names or self._ground_region_ids:
+            world_rules = (
+                "世界一致性（强制）：只能使用『世界状态』中列出的地区与物品。不得新增物品、"
+                "机关或 NPC，也不得让角色取得或调查不在其所在地区、也不在其身上的物品。"
+                "物品目录只用于保持一致，不要主动揭示尚未被调查的物品。"
+                "若要改变门锁、机关或地区状态，必须在 region_updates 中记录该地区的新状态。"
+                "不得把角色写在『世界状态』给出的当前地区之外（移动由系统判定）；"
+                "不得提前写出尚未调查物品的固定线索内容。\n\n"
+            )
         prompt = {
             "role": "user",
             "content": (
-                time_context
+                world_rules
+                + time_context
                 + (event_context + "\n\n" if event_context else "")
                 + "Resolve the simultaneous actions together, respecting established facts "
                 "and each target's choices. Give every action a definitive outcome this "
@@ -954,7 +1005,15 @@ class LLMContextManager:
                 "若无法与提议对象即时沟通（相隔很远、无通讯手段），instant_comm=false。\n"
                 "世界操作：移动时从『可前往』中选目标地区填 move_to；拾取时从『可见物品』中"
                 "选填 take_item；调查时从可见或携带物品中选填 referenced_item；均照抄 id，"
-                "不确定就留空。\n\n"
+                "不确定就留空。\n"
+                "move_to 必须填玩家真正想去的那个地区：只要输入表达了移动（去/前往/回到/"
+                "走向/走进/赶往某地），就一定要填 move_to=该地区 id，哪怕一步走不到；系统会"
+                "判断路线并给出回绝理由。绝不能用中途站代替目的地，也不要自己替玩家走一步。"
+                "只有完全没有移动意图时才留空。referenced_region 只用于提到远处地点，不表示"
+                "移动。\n"
+                "scan_region：当玩家是在笼统地查看/搜查/打量整个地区、并没有点名某件具体"
+                "物品时填 true（系统会把这处可细看的东西列给他）；只要点了具体物品、只是在"
+                "对话、移动或做别的动作，就填 false。这是语义判断，不要依据固定措辞。\n\n"
                 f"可用耗时规则（优先命中关键词最多的规则）：\n{rules_text}\n"
                 "duration_minutes：命中规则时填 matched_rule 并在其区间内取值；无命中则"
                 "matched_rule 留空并给出合理估值。\n\n"
@@ -965,7 +1024,7 @@ class LLMContextManager:
                 "若本次输入是在执行其中某个约定，填 plan_id（照抄其编号）；否则留空。\n\n"
                 "只返回 JSON，字段：valid, reason, kind, targets, proposal_to, response_to, "
                 "response, matched_rule, duration_minutes, instant_comm, referenced_item, "
-                "referenced_region, plan_id, move_to, take_item。"
+                "referenced_region, plan_id, move_to, take_item, scan_region。"
             ),
         }
         return await self._request(
@@ -1051,6 +1110,7 @@ class LLMContextManager:
                     self._check_public_output(public_title, {})
                 if isinstance(result, RoundResolution):
                     self._check_public_output(result, private_rolls or {})
+                    self._check_world_grounding(result, repair)
                     if opening_names is not None:
                         missing = [
                             name
@@ -1122,6 +1182,180 @@ class LLMContextManager:
                     pass
             self.history.extend([prompt, {"role": "assistant", "content": content}])
         return result
+
+    # Narrative handing a concrete object to a character. Scenery and bare
+    # mentions are deliberately unmatched: only counted objects are checked.
+    _ACQUIRE_VERBS = (
+        "找到",
+        "捡起",
+        "拾起",
+        "抠出",
+        "取出",
+        "掏出",
+        "翻出",
+        "摸出",
+        "拿起",
+        "收起",
+        "收进",
+        "揣进",
+        "抽出",
+        "拔出",
+        "捡到",
+    )
+    _OBJECT_COUNTER = r"[一二三四五六七八九十几两半][小大]?[枚片张把封串截块颗根本个只支]"
+    _MECHANISM_WORDS = ("崩断", "松脱", "解锁", "断裂", "塌")
+
+    def _check_world_grounding(self, result: RoundResolution, repair: int) -> None:
+        """Reject narration that invents objects or changes the world silently.
+
+        Narrow on purpose: a known object may be mentioned even when it is far
+        away (a door may name the key it needs); only counted acquisition claims
+        for objects outside the room's catalogue, and mechanism changes left out of
+        ``region_updates``, are rejected. On the final attempt the text is kept and
+        logged instead of failing the round.
+        """
+        # Only rooms that actually define a world are checked: a pure chat room
+        # has a corpus but no catalogue, and must keep its freeform narration.
+        if not self._ground_item_names and not self._ground_region_ids:
+            return
+        if self._ground_region_ids:
+            unknown = [
+                region_id
+                for region_id in result.region_updates
+                if region_id not in self._ground_region_ids
+            ]
+            if unknown:
+                self._grounding_failure(
+                    "region_updates 里出现了不存在的地区 id：" + "、".join(unknown) + "。", repair
+                )
+                return
+        texts = [result.global_narrative, *result.player_resolutions.values()]
+        for text in texts:
+            for sentence in re.split(r"[。；!?\n]", text):
+                phrase = self._acquired_object(sentence)
+                if phrase and not self._known_object(phrase):
+                    self._grounding_failure(
+                        "叙事里出现了世界目录之外的物件「"
+                        + phrase
+                        + "」。只能使用已定义的物品，不得新增物件、线索载体或机关。",
+                        repair,
+                    )
+                    return
+        if self._ground_region_ids and not result.region_updates:
+            for text in texts:
+                if any(word in text for word in self._MECHANISM_WORDS):
+                    self._grounding_failure(
+                        "叙事改变了门锁或机关的状态，但 region_updates 没有记录哪个地区发生了变化。",
+                        repair,
+                    )
+                    return
+        self._check_clue_leaks(texts, repair)
+        self._check_positions(result, repair)
+
+    @staticmethod
+    def _fold(text: str) -> str:
+        """Drop spacing and punctuation so minor formatting cannot hide a leak."""
+        return re.sub(r"[\s\W]+", "", text or "")
+
+    def _check_clue_leaks(self, texts: list[str], repair: int) -> None:
+        """Block fixed clue text that the engine has never handed to this player."""
+        if not self._ground_clues:
+            return
+        haystack = self._fold("\n".join(texts))
+        if not haystack:
+            return
+        for item_id, (name, clue) in self._ground_clues.items():
+            if item_id in self._round_investigated:
+                continue
+            label = name or item_id
+            quoted = [
+                self._fold(token) for token in re.findall(r"[『「]([^』」]{2,20})[』」]", clue)
+            ]
+            for token in quoted:
+                if token and token in haystack:
+                    self._grounding_failure(
+                        f"叙事写出了尚未调查的物品「{label}」的固定线索（『{token}』）；"
+                        "线索只能由系统在玩家调查后下发",
+                        repair,
+                    )
+                    return
+            needle = self._fold(clue)
+            if len(needle) < 10:
+                continue
+            for start in range(len(needle) - 9):
+                if needle[start : start + 10] in haystack:
+                    self._grounding_failure(
+                        f"叙事写出了尚未调查的物品「{label}」的固定线索；"
+                        "线索只能由系统在玩家调查后下发",
+                        repair,
+                    )
+                    return
+
+    # Arrival claims are matched per clause; intent clauses are exempt so
+    # "准备赶去宴厅" is not mistaken for "已到宴厅".
+    _ARRIVAL_PATTERN = r".{0,6}(?:回到|走进|进入|来到|抵达|到了|转入|进了)"
+    _INTENT_WORDS = ("准备", "打算", "想要", "正要", "想去", "将要", "试图", "如果", "若是")
+
+    def _check_positions(self, result: RoundResolution, repair: int) -> None:
+        """Keep characters inside the region the engine places them in."""
+        if not self._round_positions or not self._ground_region_names:
+            return
+        for character, region in self._round_positions.items():
+            text = result.player_resolutions.get(character)
+            if not text:
+                continue
+            for clause in re.split(r"[，。；！？\n]", text):
+                if not clause.strip():
+                    continue
+                if any(word in clause for word in self._INTENT_WORDS):
+                    continue
+                for name in self._ground_region_names:
+                    if not name or name == region:
+                        continue
+                    standing = re.search(
+                        re.escape(f"你在{name}") + r"(?!门口|门外|外面|附近|方向|旁|前)",
+                        clause,
+                    )
+                    arriving = re.search(self._ARRIVAL_PATTERN + re.escape(name), clause)
+                    if standing or arriving:
+                        self._grounding_failure(
+                            f"{character} 当前在「{region}」，叙事却把角色放到了「{name}」；"
+                            "不得在叙述里私自移动角色",
+                            repair,
+                        )
+                        return
+
+    def _acquired_object(self, sentence: str) -> str | None:
+        """Return the counted object phrase an acquisition verb introduces, if any."""
+        for verb in self._ACQUIRE_VERBS:
+            index = sentence.find(verb)
+            if index < 0:
+                continue
+            tail = sentence[index + len(verb) :]
+            match = re.search(self._OBJECT_COUNTER + r"[^，。；!?]{1,10}", tail)
+            if match:
+                return match.group(0).strip()
+        return None
+
+    def _known_object(self, phrase: str) -> bool:
+        """Whether a phrase names a defined object or appears in the room's text."""
+        folded = phrase.casefold()
+        bare = re.sub("^" + self._OBJECT_COUNTER, "", folded)
+        for name in self._ground_item_names:
+            if name.casefold() in folded or folded in name.casefold():
+                return True
+            if bare and (name.casefold() in bare or bare in name.casefold()):
+                return True
+        if not self._ground_corpus:
+            return False
+        return folded in self._ground_corpus or (bool(bare) and bare in self._ground_corpus)
+
+    def _grounding_failure(self, message: str, repair: int) -> None:
+        """Ask for one correction, then keep the narration rather than stalling."""
+        if repair >= self.llm.max_retries:
+            logger.warning("World grounding violation kept after retries: %s", message)
+            return
+        raise LLMResolutionError(message)
 
     @staticmethod
     def _check_semantics(
