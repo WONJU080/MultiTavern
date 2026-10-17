@@ -1,11 +1,20 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Anyworld</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=30">
+  <script>
+    // Apply the saved theme before first paint to avoid a flash.
+    try {
+      var savedTheme = localStorage.getItem("anyworld-theme");
+      document.documentElement.dataset.theme = savedTheme === "vellum" ? "vellum" : "lamp";
+    } catch (error) {
+      document.documentElement.dataset.theme = "lamp";
+    }
+  </script>
+  <link rel="stylesheet" href="/static/css/style.css?v=55">
   <link rel="icon" type="image/png" href="/static/favicon/favicon-96x96.png" sizes="96x96" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon/favicon.svg" />
   <link rel="shortcut icon" href="/static/favicon/favicon.ico" />
@@ -14,54 +23,198 @@
 </head>
 
 <body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <linearGradient id="aw-brass" x1="0" y1="0" x2="0.4" y2="1">
+        <stop offset="0" stop-color="#f8d9ad" />
+        <stop offset="0.45" stop-color="#e0a35e" />
+        <stop offset="1" stop-color="#b06f33" />
+      </linearGradient>
+    </defs>
+  </svg>
+
   <main id="grid-container" hidden>
-    <section id="chat-pane" aria-label="玩家与队伍聊天">
-      <div id="player-roster" aria-label="Current players">
-        <h2>玩家</h2>
-        <ul id="player-list"></ul>
-      </div>
-      <div id="chat-messages" aria-label="Party chat" aria-live="polite"></div>
-      <form id="chat-form">
-        <input id="chat-input" maxlength="10000" autocomplete="off" placeholder="与队伍聊天…"
-          aria-label="Chat message">
-      </form>
-    </section>
+    <!-- ---------- top bar ---------- -->
     <header id="title-pane">
-      <span id="scenario-title">等待剧情初始化…</span>
-      <span id="game-clock" hidden aria-label="游戏内时钟"></span>
-      <details id="token-usage" hidden>
-        <summary aria-label="显示 token 统计"><span id="token-chart" role="img"
-          aria-label="估算的保留上下文"></span><span id="token-count"></span></summary>
-        <div id="token-details"></div>
-      </details>
-      <span id="player-identity" aria-label="当前玩家"></span>
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 48 48" width="27" height="27" aria-hidden="true">
+          <path fill="url(#aw-brass)" fill-rule="evenodd"
+            d="M13 0 H35 A13 13 0 0 1 48 13 V35 A13 13 0 0 1 35 48 H13 A13 13 0 0 1 0 35 V13 A13 13 0 0 1 13 0 Z M24 8.5 L37.4 40 H30.6 L28.1 33.6 H19.9 L17.4 40 H10.6 Z M24 17.6 L28.7 24.6 L24 31.6 L19.3 24.6 Z" />
+        </svg>
+        <span class="brand-name">Anyworld</span>
+      </div>
+      <span class="top-sep" aria-hidden="true"></span>
+      <div class="scenario">
+        <span id="scenario-title">等待剧情初始化…</span>
+      </div>
+      <div class="top-fill"></div>
+      <div class="top-tools">
+        <span id="game-clock" hidden aria-label="游戏内时钟"></span>
+        <details id="token-usage" hidden>
+          <summary aria-label="显示 token 统计">
+            <span id="token-chart" role="img" aria-label="估算的保留上下文"></span>
+            <span id="token-count"></span>
+          </summary>
+          <div id="token-details"></div>
+        </details>
+        <span id="player-identity" aria-label="当前玩家"></span>
+        <button type="button" id="theme-toggle" class="icon-btn" aria-label="切换主题" title="切换主题">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="4.2" />
+            <path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.4 5.4l1.6 1.6M17 17l1.6 1.6M18.6 5.4L17 7M7 17l-1.6 1.6" />
+          </svg>
+        </button>
+        <button type="button" id="mobile-menu-button" hidden aria-label="菜单">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="5" cy="12" r="1.7" />
+            <circle cx="12" cy="12" r="1.7" />
+            <circle cx="19" cy="12" r="1.7" />
+          </svg>
+        </button>
+      </div>
     </header>
+
+    <!-- ---------- mobile tabs ---------- -->
     <nav id="mobile-view-toggle" aria-label="视图切换">
       <button type="button" id="view-story" class="active">剧情</button>
       <button type="button" id="view-chat">聊天</button>
     </nav>
-    <section id="log-pane" data-pane-title="Game State" aria-label="游戏状态：剧情与玩家行动"
-      aria-live="polite">
-      <img id="game-banner" src="/static/media/AnyworldBanner.jpg" alt="Anyworld"
-        width="1376" height="322" fetchpriority="high">
-    </section>
-    <form id="input-pane">
-      <div id="skip-vote-box" hidden>
-        <span id="skip-vote-status" aria-live="polite"></span>
-        <button type="button" id="skip-vote-button">投票跳过</button>
+
+    <!-- ---------- left rail: party + chat ---------- -->
+    <section id="chat-pane" aria-label="玩家与队伍聊天">
+      <div id="player-roster" aria-label="队伍">
+        <h2>队伍</h2>
+        <ul id="player-list"></ul>
       </div>
-      <div id="schedule-status" hidden aria-live="polite"></div>
-      <button type="button" id="hold-button" hidden>观望</button>
-      <input type="text" id="action-input" maxlength="50000" disabled autocomplete="off"
-        placeholder="等待轮到你…" aria-label="Your character action">
+      <div class="rail-divider" aria-hidden="true"></div>
+      <div class="rail-head">
+        <span class="eyebrow">队伍频道</span>
+        <span class="rail-hint">AI 看不到</span>
+      </div>
+      <div id="chat-messages" aria-label="队伍聊天" aria-live="polite"></div>
+      <form id="chat-form">
+        <input id="chat-input" maxlength="10000" autocomplete="off" placeholder="与队伍聊天…"
+          aria-label="聊天消息">
+        <button type="submit" class="icon-btn" aria-label="发送">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 12h13M12 6l6 6-6 6" />
+          </svg>
+        </button>
+      </form>
+    </section>
+
+    <!-- ---------- centre: story ---------- -->
+    <section id="log-pane" aria-label="游戏状态：剧情与玩家行动" aria-live="polite">
+      <img id="game-banner" src="/static/media/AnyworldBanner.jpg" alt="" width="1376" height="322"
+        fetchpriority="high" hidden>
+    </section>
+
+    <!-- ---------- right rail: turn + actions ---------- -->
+    <aside id="side-pane" aria-label="行动面板">
+      <div class="card turn-card">
+        <div class="turn-top">
+          <span class="round-no" id="turn-round">ROUND —</span>
+          <span class="chip" id="turn-chip">准备</span>
+        </div>
+        <div class="turn-who">
+          <span class="avatar" id="turn-avatar" aria-hidden="true">·</span>
+          <div class="turn-id">
+            <div class="turn-name" id="turn-name">等待开始</div>
+            <div class="turn-sub" id="turn-sub">尚未进入回合</div>
+          </div>
+        </div>
+        <div class="progress">
+          <span id="turn-progress">—</span>
+          <span class="progress-track"><span class="progress-fill" id="turn-progress-fill"
+              style="width:0%"></span></span>
+        </div>
+      </div>
+
+      <div class="card quick-card" id="quick-card">
+        <div class="card-head"><span class="eyebrow">快捷</span></div>
+        <div class="quick">
+          <button type="button" id="map-button" hidden title="地图">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9 4l-6 3v13l6-3 6 3 6-3V4l-6 3-6-3z" />
+              <path d="M9 4v13M15 7v13" />
+            </svg>地图
+          </button>
+          <button type="button" id="codex-button" hidden title="物品与事件">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 5.5A2.5 2.5 0 016.5 3H20v18H6.5A2.5 2.5 0 004 23z" />
+              <path d="M8 7h8M8 11h6" />
+            </svg>图鉴
+          </button>
+          <button type="button" id="character-card-button" hidden title="我的角色卡">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="8" r="3.5" />
+              <path d="M5 20c0-3.5 3.1-5.5 7-5.5s7 2 7 5.5" />
+            </svg>角色
+          </button>
+          <button type="button" id="truth-button" hidden title="可能的真相">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3l2 5 5 .8-3.6 3.5.9 5-4.3-2.3L7.7 22.3l.9-5L5 13.8 10 13z" />
+            </svg>真相
+          </button>
+        </div>
+      </div>
+
+      <div class="card host-card" id="host-card">
+        <div class="card-head"><span class="eyebrow">房主</span></div>
+        <div class="stack">
+          <button type="button" id="retry-round-button" class="btn-ghost" hidden>重试暂停回合</button>
+          <button type="button" id="end-game-button" class="btn-danger" hidden>结束游戏</button>
+          <p id="host-hint" class="hint"></p>
+        </div>
+      </div>
+
+      <div class="side-foot">
+        <button type="button" id="leave-room-button" hidden>离开房间</button>
+        <span id="connection-status" role="status">连接中…</span>
+      </div>
+    </aside>
+
+    <!-- ---------- composer ---------- -->
+    <form id="input-pane">
+      <div class="status-strip">
+        <div id="skip-vote-box" hidden>
+          <span id="skip-vote-status" aria-live="polite"></span>
+          <button type="button" id="skip-vote-button">投票跳过</button>
+        </div>
+        <div id="schedule-status" hidden aria-live="polite"></div>
+      </div>
+      <div id="mobile-turn" class="mobile-turn" hidden></div>
+      <div id="quick-slot" class="quick-slot"></div>
+      <div class="composer-row">
+        <input type="text" id="action-input" maxlength="50000" disabled autocomplete="off"
+          placeholder="等待轮到你…" aria-label="你的角色行动">
+        <button type="button" id="hold-button" class="btn-ghost" hidden>观望</button>
+        <button type="submit" class="btn-primary send" aria-label="提交行动">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 12h13M12 6l6 6-6 6" />
+          </svg>
+        </button>
+      </div>
+      <div class="composer-hint">
+        <kbd>Enter</kbd> 提交 · 行动会公开给队友
+      </div>
     </form>
   </main>
 
+  <div id="sheet-scrim" hidden></div>
+
+  <!-- ================= login ================= -->
   <div id="login-modal" class="modal" role="dialog" aria-modal="true">
-    <form id="login-form" class="modal-card">
+    <form id="login-form" class="modal-card auth-card">
+      <div class="auth-mark">
+        <svg viewBox="0 0 48 48" width="46" height="46" aria-hidden="true">
+          <path fill="url(#aw-brass)" fill-rule="evenodd"
+            d="M13 0 H35 A13 13 0 0 1 48 13 V35 A13 13 0 0 1 35 48 H13 A13 13 0 0 1 0 35 V13 A13 13 0 0 1 13 0 Z M24 8.5 L37.4 40 H30.6 L28.1 33.6 H19.9 L17.4 40 H10.6 Z M24 17.6 L28.7 24.6 L24 31.6 L19.3 24.6 Z" />
+        </svg>
+      </div>
       <h1>Anyworld</h1>
       <p>创建房间当房主，或用邀请码加入朋友的房间。</p>
-      <div class="mode-toggle" role="tablist" aria-label="Room mode">
+      <div class="mode-toggle" role="tablist" aria-label="房间模式">
         <button type="button" id="mode-create" class="mode-button" role="tab">创建房间</button>
         <button type="button" id="mode-join" class="mode-button active" role="tab">加入房间</button>
       </div>
@@ -94,42 +247,68 @@
           </details>
         </div>
       </fieldset>
-      <button type="submit" id="login-submit">进入</button>
+      <button type="submit" id="login-submit" class="btn-primary btn-block">进入</button>
       <p id="login-error" class="error" role="alert"></p>
       <div id="join-step" hidden>
-        <p>选择你的角色：</p>
+        <p class="join-title">选择你的角色：</p>
         <div id="join-character-list"></div>
         <p id="join-status" class="error" role="alert"></p>
       </div>
     </form>
   </div>
 
+  <!-- ================= host configuration ================= -->
   <div id="host-modal" class="modal" role="dialog" aria-modal="true" hidden>
     <div class="modal-card">
       <section id="scenario-step">
         <h2>创建剧情</h2>
+        <p class="config-hint">角色池、剧情设定与世界配置。未认领的角色由 AI 托管。</p>
         <form id="scenario-form">
           <div class="config-toolbar">
             <button type="button" id="load-config-button">导入配置</button>
             <button type="button" id="export-config-button">导出配置</button>
             <button type="button" id="import-st-button">导入 ST（角色卡/预设）</button>
             <input type="file" id="load-config-input" accept=".json,application/json" hidden>
-            <input type="file" id="import-st-input" accept=".json,.png,application/json,image/png" hidden>
+            <input type="file" id="import-st-input" accept=".json,.png,application/json,image/png"
+              hidden>
           </div>
           <p class="config-hint" id="import-warnings" hidden></p>
-          <label id="cast-label">角色名单——创建角色池；可选勾选你要扮演的角色（留空则旁观）：</label>
-          <div id="character-editor"></div>
-          <button type="button" id="add-character">+ 添加角色</button>
-          <label class="check-label"><input type="checkbox" id="random-turn-order" checked> 每轮随机打乱行动顺序</label>
-          <label class="check-label"><input type="checkbox" id="schedule-strict"> 启用逐行动时间轴（严格调度，需同时启用游戏内时钟）</label>
-          <label for="scenario-input">描述世界观、角色与开场情境</label>
-          <textarea id="scenario-input" maxlength="500000" required></textarea>
-          <label for="opening-input">固定开场白（可选；填写后原样作为开场展示，不再由 AI 生成）</label>
-          <textarea id="opening-input" maxlength="500000"
-            placeholder="例：雨停之前，三人在旧档案室碰面——甲在核对尸检记录，乙靠在窗边听码头动静，丙摊开一沓旧报纸。"></textarea>
-          <label for="guidance-input">主持私密指引（可选）</label>
-          <textarea id="guidance-input" maxlength="500000"
-            placeholder="例：每当玩家行动时，保留一点极小概率发生极度随机事件的可能。"></textarea>
+
+          <section class="cfg-section">
+            <header class="cfg-head">
+              <span class="cfg-num">01</span>
+              <span class="cfg-title">角色池</span>
+              <span class="cfg-sub" id="cast-count"></span>
+            </header>
+            <div class="cfg-body">
+              <label id="cast-label">角色名单——创建角色池；可选勾选你要扮演的角色（留空则旁观）：</label>
+              <div id="character-editor"></div>
+              <button type="button" id="add-character">＋ 添加角色</button>
+              <label class="check-label"><input type="checkbox" id="random-turn-order" checked>
+                每轮随机打乱行动顺序</label>
+              <label class="check-label"><input type="checkbox" id="schedule-strict">
+                启用逐行动时间轴（严格调度，需同时启用游戏内时钟）</label>
+            </div>
+          </section>
+
+          <section class="cfg-section">
+            <header class="cfg-head">
+              <span class="cfg-num">02</span>
+              <span class="cfg-title">剧情与开场</span>
+              <span class="cfg-sub">必填</span>
+            </header>
+            <div class="cfg-body">
+              <label for="scenario-input">描述世界观、角色与开场情境</label>
+              <textarea id="scenario-input" maxlength="500000" required></textarea>
+              <label for="opening-input">固定开场白（可选；填写后原样作为开场展示，不再由 AI 生成）</label>
+              <textarea id="opening-input" maxlength="500000"
+                placeholder="例：雨停之前，三人在旧档案室碰面——甲在核对尸检记录，乙靠在窗边听码头动静，丙摊开一沓旧报纸。"></textarea>
+              <label for="guidance-input">主持私密指引（可选）</label>
+              <textarea id="guidance-input" maxlength="500000"
+                placeholder="例：每当玩家行动时，保留一点极小概率发生极度随机事件的可能。"></textarea>
+            </div>
+          </section>
+
           <details class="config-section">
             <summary>游戏内时钟与耗时规则（可选）</summary>
             <label class="check-label"><input type="checkbox" id="time-enabled"> 启用权威时钟</label>
@@ -151,18 +330,21 @@
               <button type="button" id="add-time-rule">+ 添加耗时规则</button>
             </div>
           </details>
+
           <details class="config-section">
             <summary>事件（可选）：全局定时，或按地区触发</summary>
             <p class="config-hint">填写「地区id」即按地区触发（进入地区 / 该地区到点），无需启用时钟；留空则为全局定时事件（需启用时钟）。</p>
             <div id="events-editor"></div>
             <button type="button" id="add-event">+ 添加事件</button>
           </details>
+
           <details class="config-section">
             <summary>世界书（可选）</summary>
             <p class="config-hint">条目只在关键词出现在近期剧情时注入 AI 上下文，绝不展示给玩家。</p>
             <div id="lorebook-editor"></div>
             <button type="button" id="add-lorebook">+ 添加条目</button>
           </details>
+
           <details class="config-section">
             <summary>提示块与采样（高级）</summary>
             <p class="config-hint">按固定位置注入的有序提示块与生成采样参数。后台材料，绝不展示给玩家。</p>
@@ -190,6 +372,7 @@
             <div id="prompt-blocks-editor"></div>
             <button type="button" id="add-prompt-block">+ 添加提示块</button>
           </details>
+
           <details class="config-section">
             <summary>可能的真相（插件，可选）</summary>
             <p class="config-hint">揭晓后的提问对所有玩家可见；每名玩家每回合可提交一次真相，经 AI 裁定采纳后公开署名，并作为下一回合的参考素材。</p>
@@ -208,6 +391,7 @@
               <button type="button" id="add-truth-question">+ 添加提问</button>
             </div>
           </details>
+
           <details class="config-section">
             <summary>地区与物品（世界，可选）</summary>
             <p class="config-hint">填写地区后自动启用逐行动时间轴。连接写法：<code>目标地区</code> 或 <code>目标地区&gt;需要的物品id</code>，逗号分隔。</p>
@@ -221,9 +405,13 @@
             <div id="items-editor"></div>
             <button type="button" id="add-item">+ 添加物品</button>
           </details>
-          <button type="submit" id="scenario-submit">生成剧情</button>
+
+          <div class="sticky-actions">
+            <button type="submit" id="scenario-submit" class="btn-primary">生成剧情</button>
+          </div>
         </form>
       </section>
+
       <section id="lobby-step" hidden>
         <h2>剧情就绪</h2>
         <p>把邀请码发给玩家，大家到齐后开始。</p>
@@ -232,22 +420,29 @@
           <strong id="invite-code">------</strong>
           <button type="button" id="copy-invite">复制</button>
         </div>
-        <div id="lobby-roster" aria-label="Players in the lobby">
+        <div id="lobby-roster" aria-label="房间内玩家">
           <p id="lobby-player-count" role="status"></p>
           <ul id="lobby-player-list"></ul>
         </div>
-        <button id="start-button" type="button">开始游戏</button>
-        <button id="edit-scenario-button" type="button" class="secondary">编辑剧情与配置</button>
+        <div class="row-actions">
+          <button id="start-button" type="button" class="btn-primary">开始游戏</button>
+          <button id="edit-scenario-button" type="button" class="secondary">编辑剧情与配置</button>
+        </div>
       </section>
+
       <p id="host-status" role="status"></p>
-      <button id="close-room-button" type="button">关闭房间</button>
+      <div class="modal-foot">
+        <button id="close-room-button" type="button">关闭房间</button>
+      </div>
     </div>
   </div>
 
   <div id="dm-thinking" hidden role="status">
     <span class="thinking-orb" aria-hidden="true"></span>
-    主持人正在编织结局……
+    <span id="dm-thinking-text">主持人正在结算本轮…</span>
   </div>
+
+  <!-- ================= character card ================= -->
   <div id="character-card-modal" class="modal" role="dialog" aria-modal="true" hidden>
     <form id="character-card-form" class="modal-card">
       <h2>我的角色卡</h2>
@@ -256,63 +451,71 @@
       <textarea id="character-card-description" maxlength="50000" rows="3"></textarea>
       <label for="character-card-personality">性格</label>
       <textarea id="character-card-personality" maxlength="10000" rows="3"
-        placeholder="例：关界-值义-欲守-动营-表封-防持-压控；冷静、务实……"></textarea>
+        placeholder="例：冷静、务实……"></textarea>
       <label for="character-card-style">语言风格</label>
       <textarea id="character-card-style" maxlength="10000" rows="2"
-        placeholder="例：短句、克制；自称'我'，不绕弯子……"></textarea>
+        placeholder="例：短句、克制……"></textarea>
       <label for="character-card-example">示例台词</label>
       <textarea id="character-card-example" maxlength="10000" rows="2"
-        placeholder="例：“航海不是浪漫的事。航海是运力、成本和补给线的数学。”"></textarea>
-      <button type="submit" id="character-card-save">保存</button>
-      <button type="button" id="character-card-close" class="secondary">关闭</button>
+        placeholder="例：“航海不是浪漫的事。”"></textarea>
+      <div class="modal-foot">
+        <button type="submit" id="character-card-save" class="btn-primary">保存</button>
+        <button type="button" id="character-card-close" class="secondary">关闭</button>
+      </div>
     </form>
   </div>
+
+  <!-- ================= key required ================= -->
   <div id="key-required-modal" class="modal" role="dialog" aria-modal="true" hidden>
     <form id="key-required-form" class="modal-card">
       <h2>需要 API Key</h2>
       <p class="config-hint">这个房间存储的 API Key 无法解密（可能是服务器密钥环变更或文件损坏）。请房主重新填入 Key，房间才能继续推理。</p>
       <label for="key-required-input">API Key</label>
       <input id="key-required-input" type="password" maxlength="512" autocomplete="off" required>
-      <button type="submit">提交</button>
+      <div class="modal-foot">
+        <button type="submit" class="btn-primary">提交</button>
+      </div>
       <p id="key-required-error" class="error" role="alert"></p>
     </form>
   </div>
-  <button id="end-game-button" type="button" hidden>结束游戏</button>
-  <button id="retry-round-button" type="button" hidden>重试暂停回合</button>
-  <button id="leave-room-button" type="button" hidden>离开房间</button>
-  <button id="character-card-button" type="button" hidden>我的角色卡</button>
-  <button id="map-button" type="button" hidden>地图</button>
-  <button id="codex-button" type="button" hidden>物品与事件</button>
-  <button id="truth-button" type="button" hidden>✦ 可能的真相</button>
+
+  <!-- ================= map / codex / truth ================= -->
   <div id="map-modal" class="modal" role="dialog" aria-modal="true" hidden>
-    <div class="modal-card" id="map-card">
+    <div class="modal-card wide" id="map-card">
       <h2>地图</h2>
       <p class="config-hint">全队共享：已到过的地区、各角色位置与背包、可从当前地区前往的地区、以及该地区内已知的物品（线索会标注）。</p>
-      <div id="map-body"></div>
-      <button type="button" id="map-close" class="secondary">关闭</button>
+      <div id="map-body" class="modal-scroll"></div>
+      <div class="modal-foot">
+        <button type="button" id="map-close" class="secondary">关闭</button>
+      </div>
     </div>
   </div>
+
   <div id="codex-modal" class="modal" role="dialog" aria-modal="true" hidden>
-    <div class="modal-card" id="codex-card">
+    <div class="modal-card wide" id="codex-card">
       <h2>物品与事件</h2>
       <p class="config-hint">已发现的物品（含原本所在地与介绍）与已触发的事件。</p>
-      <div id="codex-body"></div>
-      <button type="button" id="codex-close" class="secondary">关闭</button>
+      <div id="codex-body" class="modal-scroll"></div>
+      <div class="modal-foot">
+        <button type="button" id="codex-close" class="secondary">关闭</button>
+      </div>
     </div>
   </div>
+
   <div id="truth-modal" class="modal" role="dialog" aria-modal="true" hidden>
-    <div class="modal-card" id="truth-card">
+    <div class="modal-card wide" id="truth-card">
       <h2>可能的真相</h2>
       <p class="config-hint">把你确信的一个真相或片段提交给主持人；通过裁定的真相会公开署名展示，并在下一回合供 AI 参考。</p>
       <p id="truth-round-status" class="config-hint" role="status"></p>
-      <div id="truth-questions"></div>
+      <div id="truth-questions" class="modal-scroll"></div>
       <p id="truth-error" class="error" role="alert"></p>
-      <button type="button" id="truth-close" class="secondary">关闭</button>
+      <div class="modal-foot">
+        <button type="button" id="truth-close" class="secondary">关闭</button>
+      </div>
     </div>
   </div>
-  <button id="mobile-menu-button" type="button" hidden aria-label="Menu">⋯</button>
-  <div id="connection-status" role="status">连接中…</div>
-  <script src="/static/js/app.js?v=s4i-36"></script>
+
+  <script src="/static/js/app.js?v=s5a-08"></script>
 </body>
 
 </html>

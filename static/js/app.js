@@ -432,7 +432,7 @@ function renderPlayers(payload = {}) {
             const name = document.createElement("span");
             name.textContent = char.claimed_by
                 ? `${char.name} · ${char.claimed_by}`
-                : `${char.name} · unclaimed`;
+                : `${char.name} · 未认领`;
             const status = document.createElement("span");
             status.className = "player-presence-label";
             status.textContent = char.claimed_by
@@ -460,6 +460,16 @@ function renderPlayers(payload = {}) {
 
 function setThinking(active) {
     elements.dmThinking.hidden = !active;
+    if (active) {
+        if (turnCardState.mode !== "settling") {
+            turnCardState.modeBeforeSettling = turnCardState.mode;
+        }
+        turnCardState.mode = "settling";
+        paintTurnCard();
+    } else if (turnCardState.mode === "settling") {
+        turnCardState.mode = turnCardState.modeBeforeSettling || "turn";
+        paintTurnCard();
+    }
 }
 
 function playerColorClass(playerName) {
@@ -590,6 +600,115 @@ function updateSkipVote(activePlayerId) {
     elements.skipVoteStatus.textContent = "";
 }
 
+/* ---------------------------------------------------------------------------
+ * Turn card (right rail). Purely presentational: it mirrors state the engine
+ * already sent, and never becomes a second source of truth.
+ * ------------------------------------------------------------------------- */
+const turnCardState = { mode: "idle" };
+
+function paintTurnCard() {
+    const roundEl = document.getElementById("turn-round");
+    if (!roundEl) {
+        return;
+    }
+    const chip = document.getElementById("turn-chip");
+    const name = document.getElementById("turn-name");
+    const sub = document.getElementById("turn-sub");
+    const progress = document.getElementById("turn-progress");
+    const fill = document.getElementById("turn-progress-fill");
+    const avatar = document.getElementById("turn-avatar");
+    const state = turnCardState;
+
+    roundEl.textContent = lastStartedRound
+        ? `ROUND ${String(lastStartedRound).padStart(2, "0")}`
+        : "ROUND —";
+
+    const setChip = (text, live) => {
+        chip.textContent = text;
+        chip.className = live ? "chip is-live" : "chip";
+    };
+
+    // Compact turn line for the mobile composer (the rail is behind the menu there).
+    const mobileTurn = document.getElementById("mobile-turn");
+    const setMobileTurn = (label) => {
+        if (!mobileTurn) {
+            return;
+        }
+        const round = lastStartedRound ? `第 ${lastStartedRound} 回合` : "";
+        mobileTurn.textContent = [round, label].filter(Boolean).join(" · ");
+        mobileTurn.hidden = !label;
+    };
+
+    if (state.mode === "window") {
+        const active = state.windowActive || [];
+        const waiting = state.waiting || [];
+        setChip(state.own ? "行动窗口" : "等待他人", state.own);
+        name.textContent = state.own ? (myName || "你") : "其他玩家";
+        sub.textContent = state.own
+            ? "轮到你行动 · 可观望放弃本窗口"
+            : "等待其他玩家行动";
+        progress.textContent = `窗口 ${active.length} 人 · 进行中 ${waiting.length} 人`;
+        const total = Math.max(1, active.length + waiting.length);
+        fill.style.width = `${Math.round((active.length / total) * 100)}%`;
+        avatar.textContent = (name.textContent || "·").slice(0, 1);
+        setMobileTurn(state.own ? "你的行动窗口" : "等待其他玩家行动");
+        return;
+    }
+
+    if (state.mode === "turn") {
+        const own = state.activePlayerId === clientId;
+        setChip(own ? "该你行动" : "等待", own);
+        name.textContent = own ? (myName || "你") : (state.activePlayerName || "其他玩家");
+        sub.textContent = own
+            ? "输入你的行动"
+            : `等待 ${state.activePlayerName || "下一位"} 提交`;
+        progress.textContent = "回合制 · 轮流行动";
+        fill.style.width = "0%";
+        avatar.textContent = (name.textContent || "·").slice(0, 1);
+        setMobileTurn(own ? "该你行动" : `等待 ${state.activePlayerName || "下一位"}`);
+        return;
+    }
+
+    if (state.mode === "spectate") {
+        setChip("旁观", false);
+        name.textContent = "旁观中";
+        sub.textContent = "你正在观看这一局";
+        progress.textContent = "不会轮到你行动";
+        fill.style.width = "0%";
+        avatar.textContent = "观";
+        setMobileTurn("旁观中");
+        return;
+    }
+
+    if (state.mode === "paused") {
+        setChip("已暂停", false);
+        chip.className = "chip is-paused";
+        name.textContent = myName || "本局";
+        sub.textContent = "行动与骰点已保留，等待房主重试";
+        progress.textContent = "本轮已暂停";
+        fill.style.width = "0%";
+        avatar.textContent = (name.textContent || "·").slice(0, 1);
+        setMobileTurn("本轮已暂停");
+        return;
+    }
+
+    if (state.mode === "settling") {
+        setChip("结算中", true);
+        sub.textContent = "主持人正在结算本轮…";
+        avatar.textContent = (name.textContent || "·").slice(0, 1);
+        setMobileTurn("主持人正在结算");
+        return;
+    }
+
+    setChip("准备", false);
+    name.textContent = roomState === "AWAITING_PLAYERS" ? "等待玩家" : "等待开始";
+    sub.textContent = strictMode ? "严格时间轴" : "尚未进入回合";
+    progress.textContent = "—";
+    fill.style.width = "0%";
+    avatar.textContent = "·";
+    setMobileTurn("");
+}
+
 function applyTurn(activePlayerId, activePlayerName) {
     const ownTurn = activePlayerId === clientId;
     elements.actionInput.disabled = !ownTurn;
@@ -600,6 +719,10 @@ function applyTurn(activePlayerId, activePlayerName) {
         elements.actionInput.focus();
     }
     updateSkipVote(activePlayerId);
+    turnCardState.mode = amSpectator ? "spectate" : "turn";
+    turnCardState.activePlayerId = activePlayerId;
+    turnCardState.activePlayerName = activePlayerName;
+    paintTurnCard();
 }
 
 function applyScheduleWindow(payload) {
@@ -625,6 +748,11 @@ function applyScheduleWindow(payload) {
     if (own) {
         elements.actionInput.focus();
     }
+    turnCardState.mode = "window";
+    turnCardState.own = own;
+    turnCardState.windowActive = activePlayerIds;
+    turnCardState.waiting = payload.waiting || [];
+    paintTurnCard();
     if (!elements.scheduleStatus) {
         return;
     }
@@ -1453,7 +1581,8 @@ function applySnapshot(payload) {
         : (isHost ? "· 主持人" : "· 观众");
     elements.identity.textContent = `${payload.name} ${role}`;
     if (payload.scenario_title) {
-        elements.title.textContent = displayGameTitle(payload.scenario_title);
+        elements.title.textContent = payload.scenario_title || "Anyworld";
+        document.title = displayGameTitle(payload.scenario_title);
     }
     const emptyLog = !elements.log.querySelector(":scope > :not(#game-banner)");
     appendScenario(payload.opening_scenario);
@@ -1502,6 +1631,10 @@ function applySnapshot(payload) {
     showHostStep(payload.state);
     elements.endGameButton.hidden = !isHost || !["ACTIVE_TURN", "AWAITING_LLM"].includes(payload.state);
     applyTruthState(payload.truth);
+    if (payload.round_paused) {
+        turnCardState.mode = "paused";
+    }
+    paintTurnCard();
 }
 
 function handleMessage(message) {
@@ -1608,7 +1741,8 @@ function handleMessage(message) {
             setGameClock(payload.game_time);
         }
         if (payload.round_title) {
-            elements.title.textContent = displayGameTitle(payload.round_title);
+            elements.title.textContent = payload.round_title || "Anyworld";
+            document.title = displayGameTitle(payload.round_title);
         }
         if (strictMode) {
             startTimeSection(payload.game_time);
@@ -1787,6 +1921,10 @@ function handleMessage(message) {
         }
     } else if (type === "error") {
         showError(payload.msg || "未知的服务器错误。");
+        if (payload.round_paused) {
+            turnCardState.mode = "paused";
+            paintTurnCard();
+        }
         if (!elements.keyRequiredModal.hidden) {
             elements.keyRequiredError.textContent = payload.msg || "未知的服务器错误。";
         }
@@ -1988,7 +2126,7 @@ function renderCharacterPicker(payload) {
             ? `${char.name} — ${char.description}`
             : char.name;
         item.textContent = char.claimed_by
-            ? `${label} (claimed by ${char.claimed_by})`
+            ? `${label}（${char.claimed_by} 已认领）`
             : label;
         if (!taken) {
             item.addEventListener("click", () => chooseCharacter(char.name));
@@ -3054,15 +3192,68 @@ elements.scenarioForm.addEventListener("submit", (event) => {
     }
 });
 
+const SHEET_MEDIA = window.matchMedia("(max-width: 900px)");
+
+// The rail is a static column on desktop and a bottom sheet on mobile. `inert`
+// keeps the closed sheet out of the tab order without disturbing its animation.
+function syncSheetState() {
+    const open = document.body.classList.contains("menu-open");
+    const scrim = document.getElementById("sheet-scrim");
+    if (scrim) {
+        scrim.hidden = !open;
+    }
+    const pane = document.getElementById("side-pane");
+    if (pane) {
+        pane.inert = SHEET_MEDIA.matches && !open;
+    }
+}
+
 function closeMobileMenu() {
     if (document.body) {
         document.body.classList.remove("menu-open");
     }
+    syncSheetState();
 }
 
 elements.mobileMenuButton.addEventListener("click", () => {
-    if (document.body) {
-        document.body.classList.toggle("menu-open");
+    if (!document.body) {
+        return;
+    }
+    document.body.classList.toggle("menu-open");
+    syncSheetState();
+});
+
+// On narrow screens the rail becomes a sheet, which would bury the quick
+// actions behind the menu. Move the same card above the composer instead of
+// duplicating the buttons (their ids must stay unique).
+function layoutQuickActions() {
+    const card = document.getElementById("quick-card");
+    const slot = document.getElementById("quick-slot");
+    const rail = document.getElementById("side-pane");
+    if (!card || !slot || !rail) {
+        return;
+    }
+    if (SHEET_MEDIA.matches) {
+        if (card.parentElement !== slot) {
+            slot.appendChild(card);
+        }
+    } else if (card.parentElement !== rail) {
+        rail.insertBefore(card, document.getElementById("host-card"));
+    }
+}
+
+if (SHEET_MEDIA.addEventListener) {
+    SHEET_MEDIA.addEventListener("change", () => {
+        syncSheetState();
+        layoutQuickActions();
+    });
+}
+syncSheetState();
+layoutQuickActions();
+
+document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && document.body.classList.contains("menu-open")) {
+        closeMobileMenu();
     }
 });
 
@@ -3134,3 +3325,47 @@ elements.holdButton.addEventListener("click", holdTurn);
 
 makeCharacterRow();
 makeCharacterRow();
+
+/* ---------------------------------------------------------------------------
+ * Theme switch (Lamp / Vellum). The initial value is applied inline in
+ * index.html so the first paint is already correct.
+ * ------------------------------------------------------------------------- */
+const themeToggle = document.getElementById("theme-toggle");
+
+function setTheme(theme) {
+    const next = theme === "vellum" ? "vellum" : "lamp";
+    document.documentElement.dataset.theme = next;
+    try {
+        localStorage.setItem("anyworld-theme", next);
+    } catch (error) {
+        /* Storage can be unavailable; the theme still applies for this session. */
+    }
+}
+
+if (themeToggle) {
+    themeToggle.addEventListener("click", () => {
+        setTheme(document.documentElement.dataset.theme === "vellum" ? "lamp" : "vellum");
+    });
+}
+
+/* Keep the connection dot in sync with the label the app already writes. */
+const connectionEl = document.getElementById("connection-status");
+if (connectionEl) {
+    const syncConnection = () => {
+        connectionEl.classList.toggle("is-online", connectionEl.textContent.trim() === "在线");
+    };
+    new MutationObserver(syncConnection).observe(connectionEl, {
+        childList: true,
+        characterData: true,
+        subtree: true,
+    });
+    syncConnection();
+}
+
+/* Tapping outside the mobile action sheet closes it (same state as before). */
+const sheetScrim = document.getElementById("sheet-scrim");
+if (sheetScrim) {
+    sheetScrim.addEventListener("click", closeMobileMenu);
+}
+
+paintTurnCard();
