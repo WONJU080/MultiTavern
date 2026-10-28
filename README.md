@@ -1,3 +1,5 @@
+演示视频：https://www.bilibili.com/video/BV1bmsQ6bEPq
+
 # MultiTavern · 多人酒馆
 
 > **把 SillyTavern 的角色卡和预设，变成一场可以和朋友一起玩的多人跑团。**
