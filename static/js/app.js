@@ -103,22 +103,31 @@ let reconnectTimer;
 const elements = {
     grid: document.getElementById("grid-container"),
     loginModal: document.getElementById("login-modal"),
-    loginForm: document.getElementById("login-form"),
     loginError: document.getElementById("login-error"),
-    name: document.getElementById("name-input"),
-    invite: document.getElementById("invite-input"),
-    inviteLabel: document.getElementById("invite-label"),
-    llmFields: document.getElementById("llm-fields"),
+    homeView: document.getElementById("home-view"),
+    createView: document.getElementById("create-view"),
+    joinView: document.getElementById("join-view"),
+    roomsView: document.getElementById("rooms-view"),
+    createForm: document.getElementById("create-form"),
+    createName: document.getElementById("create-name"),
+    createSubmit: document.getElementById("create-submit"),
+    publicRoom: document.getElementById("public-room"),
+    privateRoom: document.getElementById("private-room"),
     llmModeOwn: document.getElementById("llm-mode-own"),
     llmModeBorrow: document.getElementById("llm-mode-borrow"),
     llmOwnFields: document.getElementById("llm-own-fields"),
     apiKey: document.getElementById("api-key-input"),
-    llmProvider: document.getElementById("llm-provider"),
     llmEndpoint: document.getElementById("llm-endpoint"),
     llmModel: document.getElementById("llm-model"),
-    modeCreate: document.getElementById("mode-create"),
-    modeJoin: document.getElementById("mode-join"),
-    loginSubmit: document.getElementById("login-submit"),
+    scanModels: document.getElementById("scan-models"),
+    modelScanResult: document.getElementById("model-scan-result"),
+    joinForm: document.getElementById("join-form"),
+    name: document.getElementById("name-input"),
+    invite: document.getElementById("invite-input"),
+    joinSubmit: document.getElementById("join-submit"),
+    publicRoomsList: document.getElementById("public-rooms-list"),
+    publicRoomsStatus: document.getElementById("public-rooms-status"),
+    refreshRooms: document.getElementById("refresh-rooms"),
     joinStep: document.getElementById("join-step"),
     joinCharacterList: document.getElementById("join-character-list"),
     joinStatus: document.getElementById("join-status"),
@@ -151,8 +160,6 @@ const elements = {
     loadConfigButton: document.getElementById("load-config-button"),
     exportConfigButton: document.getElementById("export-config-button"),
     loadConfigInput: document.getElementById("load-config-input"),
-    importStButton: document.getElementById("import-st-button"),
-    importStInput: document.getElementById("import-st-input"),
     importWarnings: document.getElementById("import-warnings"),
     samplingTemperature: document.getElementById("sampling-temperature"),
     samplingTopP: document.getElementById("sampling-top-p"),
@@ -205,7 +212,6 @@ const elements = {
     endGameButton: document.getElementById("end-game-button"),
     retryRoundButton: document.getElementById("retry-round-button"),
     leaveRoomButton: document.getElementById("leave-room-button"),
-    characterCardButton: document.getElementById("character-card-button"),
     mapButton: document.getElementById("map-button"),
     mapModal: document.getElementById("map-modal"),
     mapBody: document.getElementById("map-body"),
@@ -237,13 +243,16 @@ const elements = {
 
 let authenticated = false;
 let isHost = false;
-let loginMode = "join";
+let landingPage = "home";
 let roomClosed = false;
 let leftRoom = false;
 let reconnectWhenVisible = false;
 let pendingJoin = null;
 let pendingRoomInfo = null;
 let pendingCreateAuth = null;
+let publicRoomsTimer = null;
+let publicRoomsLoading = false;
+let lastPublicRoomsSignature = null;
 let myName = "";
 let amSpectator = false;
 let votedFor = false;
@@ -507,7 +516,7 @@ function syncActions(roundNumber, submittedActions = {}) {
 }
 
 function displayGameTitle(title) {
-    return title ? `Anyworld - ${title}` : "Anyworld";
+    return title ? `MultiTavern - ${title}` : "MultiTavern";
 }
 
 function appendScenario(scenario) {
@@ -571,6 +580,7 @@ function showError(message) {
     if (!authenticated) {
         elements.loginModal.hidden = false;
         elements.loginError.textContent = message;
+        elements.loginError.hidden = !message;
     } else {
         appendText(
             elements.chatMessages,
@@ -587,9 +597,18 @@ function showHostStep(state) {
         return;
     }
     elements.hostModal.hidden = false;
+    if (elements.loginModal) {
+        elements.loginModal.hidden = true;
+    }
+    elements.hostModal.scrollTop = 0;
     const scenarioReady = state === "AWAITING_PLAYERS";
     elements.scenarioStep.hidden = scenarioReady;
     elements.lobbyStep.hidden = !scenarioReady;
+    elements.hostModal.classList.toggle("is-lobby", scenarioReady);
+    const pageTitle = document.getElementById("config-page-title");
+    if (pageTitle) {
+        pageTitle.textContent = scenarioReady ? "房间已就绪" : "房间配置";
+    }
 }
 
 function updateSkipVote(activePlayerId) {
@@ -848,6 +867,119 @@ function mapBlock(label, nodes) {
     return block;
 }
 
+
+const MAP_PLAYER_COLORS = ["#4d7cff", "#e06f5f", "#4f9d72", "#a56cc1", "#d19a3f", "#4f9fa8"];
+
+function mapSvgNode(tag, attrs = {}) {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [key, value] of Object.entries(attrs)) {
+        node.setAttribute(key, String(value));
+    }
+    return node;
+}
+
+function mapLinks(regions) {
+    const ids = new Set(regions.map((region) => region.id));
+    const found = new Map();
+    const add = (from, to, locked) => {
+        if (!ids.has(to) || to === from) {
+            return;
+        }
+        const key = from < to ? from + "\u0000" + to : to + "\u0000" + from;
+        const current = found.get(key);
+        if (current) {
+            current.locked = current.locked && locked;
+        } else {
+            found.set(key, { a: from, b: to, locked });
+        }
+    };
+    for (const region of regions) {
+        for (const target of region.reachable || []) {
+            add(region.id, target.id, false);
+        }
+        for (const target of region.locked || []) {
+            add(region.id, target.id, true);
+        }
+    }
+    return [...found.values()];
+}
+
+function mapRegionLayout(regions, links) {
+    const n = regions.length;
+    if (!n) {
+        return new Map();
+    }
+    const nodes = regions.map((region, index) => ({
+        id: region.id,
+        x: Math.cos((index / Math.max(1, n)) * Math.PI * 2) * 230,
+        y: Math.sin((index / Math.max(1, n)) * Math.PI * 2) * 170,
+        vx: 0,
+        vy: 0,
+    }));
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    for (let step = 0; step < 170; step += 1) {
+        for (let i = 0; i < nodes.length; i += 1) {
+            for (let j = i + 1; j < nodes.length; j += 1) {
+                const a = nodes[i];
+                const b = nodes[j];
+                const dx = b.x - a.x;
+                const dy = b.y - a.y;
+                const distance = Math.max(24, Math.hypot(dx, dy));
+                const push = Math.min(7, 17000 / (distance * distance));
+                const ux = dx / distance;
+                const uy = dy / distance;
+                a.vx -= ux * push;
+                a.vy -= uy * push;
+                b.vx += ux * push;
+                b.vy += uy * push;
+            }
+        }
+        for (const link of links) {
+            const a = byId.get(link.a);
+            const b = byId.get(link.b);
+            if (!a || !b) {
+                continue;
+            }
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const distance = Math.max(1, Math.hypot(dx, dy));
+            const pull = (distance - 190) * 0.011;
+            const ux = dx / distance;
+            const uy = dy / distance;
+            a.vx += ux * pull;
+            a.vy += uy * pull;
+            b.vx -= ux * pull;
+            b.vy -= uy * pull;
+        }
+        for (const node of nodes) {
+            node.vx -= node.x * 0.0016;
+            node.vy -= node.y * 0.0016;
+            node.vx *= 0.84;
+            node.vy *= 0.84;
+            node.x += node.vx;
+            node.y += node.vy;
+        }
+    }
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const node of nodes) {
+        minX = Math.min(minX, node.x);
+        maxX = Math.max(maxX, node.x);
+        minY = Math.min(minY, node.y);
+        maxY = Math.max(maxY, node.y);
+    }
+    const halfX = Math.max(1, (maxX - minX) / 2);
+    const halfY = Math.max(1, (maxY - minY) / 2);
+    const midX = (minX + maxX) / 2;
+    const midY = (minY + maxY) / 2;
+    return new Map(nodes.map((node) => [
+        node.id,
+        { x: (node.x - midX) / halfX, y: (node.y - midY) / halfY },
+    ]));
+}
+
 function renderMap() {
     const body = elements.mapBody;
     if (!body) {
@@ -861,145 +993,416 @@ function renderMap() {
         body.appendChild(hint);
         return;
     }
+
     const regions = mapSnapshot.regions || [];
     const players = mapSnapshot.players || [];
-    const regionNames = new Map(regions.map((region) => [region.id, region.name]));
+    const regionById = new Map(regions.map((region) => [region.id, region]));
+    const colorByName = new Map(players.map((player, index) => [
+        player.name,
+        MAP_PLAYER_COLORS[index % MAP_PLAYER_COLORS.length],
+    ]));
     const myCharacter = ownCharacterCard ? ownCharacterCard.name : null;
 
-    // Team positions and packs.
-    const teams = document.createElement("section");
-    teams.className = "map-section";
-    const teamsHeading = document.createElement("h3");
-    teamsHeading.textContent = "队伍";
-    teams.appendChild(teamsHeading);
-    const teamList = document.createElement("div");
-    teamList.className = "map-team-list";
-    if (!players.length) {
-        const empty = document.createElement("p");
-        empty.className = "map-empty";
-        empty.textContent = "暂无角色";
-        teamList.appendChild(empty);
+    if (!regions.length) {
+        const hint = document.createElement("p");
+        hint.className = "map-empty";
+        hint.textContent = "还没有探索过任何地区。";
+        body.appendChild(hint);
+        return;
     }
-    players.forEach((player) => {
-        const row = document.createElement("div");
-        row.className = "map-team";
-        const name = document.createElement("span");
-        name.className = "map-team-name";
-        name.textContent = player.name;
-        row.appendChild(name);
-        const loc = document.createElement("span");
-        loc.className = "map-team-loc";
-        if (player.in_transit_to) {
-            loc.classList.add("in-transit");
-            loc.textContent = `在途 → ${regionNames.get(player.in_transit_to) || player.in_transit_to}`;
-        } else {
-            loc.textContent = regionNames.get(player.region) || player.region || "未知";
-        }
-        row.appendChild(loc);
-        const pack = document.createElement("span");
-        pack.className = "map-team-pack";
-        const carried = player.carried || [];
-        pack.textContent = carried.length ? `携带：${carried.join("、")}` : "携带：（空）";
-        row.appendChild(pack);
-        teamList.appendChild(row);
+
+    const links = mapLinks(regions);
+    const layout = mapRegionLayout(regions, links);
+    const WIDTH = 980;
+    const HEIGHT = 570;
+    const centerX = WIDTH / 2;
+    const centerY = HEIGHT / 2 + 10;
+    const project = (position) => ({
+        x: centerX + (position.x - position.y) * 205,
+        y: centerY + (position.x + position.y) * 94,
     });
-    teams.appendChild(teamList);
-    body.appendChild(teams);
 
-    // Regions, occupied ones first.
-    if (regions.length) {
-        const section = document.createElement("section");
-        section.className = "map-section";
-        const heading = document.createElement("h3");
-        heading.textContent = "地区";
-        section.appendChild(heading);
-        const grid = document.createElement("div");
-        grid.className = "map-grid";
-        const occupiedCount = (region) =>
-            players.filter((player) => player.region === region.id).length;
-        [...regions]
-            .sort((a, b) => occupiedCount(b) - occupiedCount(a))
-            .forEach((region) => {
-                const card = document.createElement("article");
-                card.className = "map-region";
-                const occupants = players.filter((player) => player.region === region.id);
-                if (myCharacter && occupants.some((player) => player.name === myCharacter)) {
-                    card.classList.add("map-here");
-                }
-                const title = document.createElement("h4");
-                title.textContent = region.name;
-                card.appendChild(title);
-                const occ = document.createElement("p");
-                occ.className = "map-occupants";
-                occ.textContent = occupants.length
-                    ? "在场：" + occupants.map((player) => player.name).join("、")
-                    : "无人在此";
-                card.appendChild(occ);
+    const shell = document.createElement("div");
+    shell.className = "map-shell";
+    const scene = document.createElement("div");
+    scene.className = "map-scene";
 
-                const items = region.items || [];
-                if (items.length) {
-                    card.appendChild(
-                        mapBlock(
-                            "物品",
-                            items.map((item) => {
-                                const line = document.createElement("div");
-                                line.className = "map-item";
-                                const label = document.createElement("span");
-                                label.className = "map-item-name";
-                                label.textContent = item.name;
-                                line.appendChild(label);
-                                if (item.key_item) {
-                                    line.appendChild(mapChip("关键", "key"));
-                                }
-                                if (item.clue) {
-                                    line.appendChild(mapChip("线索", "clue"));
-                                }
-                                if (item.carryable === false) {
-                                    line.appendChild(mapChip("不可携带", "locked"));
-                                }
-                                if (item.investigated) {
-                                    line.appendChild(mapChip("已调查", "done"));
-                                }
-                                if (item.summary) {
-                                    const summary = document.createElement("span");
-                                    summary.className = "map-item-summary";
-                                    summary.textContent = item.summary;
-                                    line.appendChild(summary);
-                                }
-                                if (item.investigated && item.detail) {
-                                    const detail = document.createElement("div");
-                                    detail.className = "map-item-detail";
-                                    detail.textContent = item.detail;
-                                    line.appendChild(detail);
-                                }
-                                return line;
-                            }),
-                        ),
-                    );
-                }
-                const reachable = region.reachable || [];
-                if (reachable.length) {
-                    card.appendChild(
-                        mapBlock(
-                            "可前往",
-                            reachable.map((target) => mapChip(target.name)),
-                        ),
-                    );
-                }
-                const locked = region.locked || [];
-                if (locked.length) {
-                    card.appendChild(
-                        mapBlock(
-                            "需条件",
-                            locked.map((target) => mapChip(target.name, "locked")),
-                        ),
-                    );
-                }
-                grid.appendChild(card);
-            });
-        section.appendChild(grid);
-        body.appendChild(section);
+    const legend = document.createElement("div");
+    legend.className = "map-legend";
+    const legendEntry = (kind, text) => {
+        const entry = document.createElement("span");
+        entry.className = "map-legend-entry";
+        const swatch = document.createElement("span");
+        swatch.className = "map-legend-swatch " + kind;
+        entry.append(swatch, document.createTextNode(text));
+        return entry;
+    };
+    legend.append(legendEntry("has-items", "有道具"), legendEntry("no-items", "无道具"));
+    const playerLegend = document.createElement("span");
+    playerLegend.className = "map-player-legend";
+    players.forEach((player, index) => {
+        const entry = document.createElement("span");
+        entry.className = "map-legend-entry";
+        const swatch = document.createElement("span");
+        swatch.className = "map-player-dot";
+        swatch.style.background = colorByName.get(player.name) || MAP_PLAYER_COLORS[index % MAP_PLAYER_COLORS.length];
+        entry.append(swatch, document.createTextNode(player.name));
+        playerLegend.appendChild(entry);
+    });
+    if (players.length) {
+        legend.appendChild(playerLegend);
     }
+
+    const stage = document.createElement("div");
+    stage.className = "map-stage";
+    const viewTag = document.createElement("span");
+    viewTag.className = "map-view-tag";
+    viewTag.textContent = "固定视角 · 俯视";
+    const svg = mapSvgNode("svg", {
+        viewBox: "0 0 " + WIDTH + " " + HEIGHT,
+        class: "map-svg",
+        role: "img",
+        "aria-label": "固定视角的 3D 区域俯视图",
+    });
+    const defs = mapSvgNode("defs");
+    const floorGradient = mapSvgNode("radialGradient", {
+        id: "map-floor-gradient",
+        cx: "50%",
+        cy: "46%",
+        r: "64%",
+    });
+    const floorStopA = mapSvgNode("stop", { offset: "0%", "stop-color": "#fbfcf9" });
+    const floorStopB = mapSvgNode("stop", { offset: "68%", "stop-color": "#edf3ed" });
+    const floorStopC = mapSvgNode("stop", { offset: "100%", "stop-color": "#e5eee6" });
+    floorGradient.append(floorStopA, floorStopB, floorStopC);
+    const dotPattern = mapSvgNode("pattern", {
+        id: "map-dot-pattern",
+        width: "34",
+        height: "34",
+        patternUnits: "userSpaceOnUse",
+    });
+    const dot = mapSvgNode("circle", {
+        cx: "1",
+        cy: "1",
+        r: "1",
+        fill: "#d3dfd5",
+        opacity: "0.55",
+    });
+    dotPattern.appendChild(dot);
+    defs.append(floorGradient, dotPattern);
+    svg.appendChild(defs);
+
+    const floor = mapSvgNode("ellipse", {
+        cx: centerX,
+        cy: centerY + 18,
+        rx: 424,
+        ry: 224,
+        fill: "url(#map-floor-gradient)",
+    });
+    const floorDots = mapSvgNode("ellipse", {
+        cx: centerX,
+        cy: centerY + 18,
+        rx: 424,
+        ry: 224,
+        fill: "url(#map-dot-pattern)",
+        opacity: "0.55",
+    });
+    svg.append(floor, floorDots);
+
+    const linkLayer = mapSvgNode("g", { class: "map-links" });
+    for (const link of links) {
+        const a = layout.get(link.a);
+        const b = layout.get(link.b);
+        if (!a || !b) {
+            continue;
+        }
+        const pa = project(a);
+        const pb = project(b);
+        const line = mapSvgNode("line", {
+            x1: pa.x,
+            y1: pa.y + 5,
+            x2: pb.x,
+            y2: pb.y + 5,
+            class: link.locked ? "map-link is-locked" : "map-link",
+        });
+        const title = mapSvgNode("title");
+        title.textContent = link.locked
+            ? "需要条件才能通行"
+            : "可以相互往来";
+        line.appendChild(title);
+        linkLayer.appendChild(line);
+    }
+    svg.appendChild(linkLayer);
+
+    const nodeLayer = mapSvgNode("g", { class: "map-nodes" });
+    const nodeGroups = new Map();
+
+    const appendRegionNode = (region) => {
+        const position = layout.get(region.id);
+        if (!position) {
+            return;
+        }
+        const point = project(position);
+        const hasItems = (region.items || []).length > 0;
+        const color = hasItems ? "#dfc46f" : "#aeb9b1";
+        const group = mapSvgNode("g", {
+            class: "map-node " + (hasItems ? "has-items" : "no-items"),
+            "data-region-id": region.id,
+            tabindex: "0",
+            role: "button",
+            "aria-label": region.name,
+        });
+        const shadow = mapSvgNode("ellipse", {
+            cx: point.x,
+            cy: point.y + 12,
+            rx: 55,
+            ry: 21,
+            fill: "#2f3832",
+            opacity: "0.07",
+        });
+        const rim = mapSvgNode("ellipse", {
+            cx: point.x,
+            cy: point.y + 6,
+            rx: 55,
+            ry: 21,
+            fill: color,
+            opacity: "0.6",
+        });
+        const ring = mapSvgNode("ellipse", {
+            cx: point.x,
+            cy: point.y,
+            rx: 55,
+            ry: 21,
+            fill: hasItems ? "#f4e8be" : "#e1e6e1",
+            "fill-opacity": "0.72",
+            stroke: color,
+            "stroke-width": "2.2",
+        });
+        const innerRing = mapSvgNode("ellipse", {
+            cx: point.x,
+            cy: point.y,
+            rx: 40,
+            ry: 14,
+            fill: "none",
+            stroke: color,
+            "stroke-width": "1",
+            opacity: "0.65",
+        });
+        const name = mapSvgNode("text", {
+            x: point.x,
+            y: point.y + 3,
+            class: "map-node-name",
+        });
+        name.textContent = region.name;
+        const meta = mapSvgNode("text", {
+            x: point.x,
+            y: point.y + 22,
+            class: "map-node-meta",
+        });
+        const itemCount = (region.items || []).length;
+        meta.textContent = itemCount ? itemCount + " 件道具" : "无道具";
+        group.append(shadow, rim, ring, innerRing, name, meta);
+        const title = mapSvgNode("title");
+        title.textContent = region.name + (itemCount ? " · " + itemCount + " 件道具" : " · 无道具");
+        group.appendChild(title);
+        group.addEventListener("click", () => selectRegion(region.id));
+        group.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                selectRegion(region.id);
+            }
+        });
+        nodeLayer.appendChild(group);
+        nodeGroups.set(region.id, group);
+    };
+    regions.forEach(appendRegionNode);
+    svg.appendChild(nodeLayer);
+
+    const characterLayer = mapSvgNode("g", { class: "map-characters" });
+    const characterAt = (x, y, color, index, label, transit, own) => {
+        const group = mapSvgNode("g", { class: "map-character" });
+        const shadow = mapSvgNode("ellipse", {
+            cx: x,
+            cy: y - 1,
+            rx: 8,
+            ry: 2.6,
+            fill: "#27342c",
+            opacity: "0.13",
+        });
+        group.appendChild(shadow);
+        if (own || transit) {
+            const halo = mapSvgNode("ellipse", {
+                cx: x,
+                cy: y - 1,
+                rx: 12,
+                ry: 7,
+                fill: "none",
+                stroke: color,
+                "stroke-width": "1.4",
+                "stroke-dasharray": transit ? "3 3" : "none",
+                opacity: own ? "0.9" : "0.55",
+            });
+            group.appendChild(halo);
+        }
+        const shapeY = y - 21;
+        let shape;
+        if (index % 4 === 0) {
+            shape = mapSvgNode("circle", { cx: x, cy: shapeY, r: 7.2 });
+        } else if (index % 4 === 1) {
+            shape = mapSvgNode("polygon", {
+                points: [x, shapeY - 8.5, x + 7.5, shapeY, x, shapeY + 8.5, x - 7.5, shapeY].join(" "),
+            });
+        } else if (index % 4 === 2) {
+            shape = mapSvgNode("polygon", {
+                points: [x, shapeY - 9, x + 8.5, shapeY + 6, x - 8.5, shapeY + 6].join(" "),
+            });
+        } else {
+            shape = mapSvgNode("rect", {
+                x: x - 6.4,
+                y: shapeY - 6.4,
+                width: 12.8,
+                height: 12.8,
+                rx: "1.2",
+            });
+        }
+        shape.setAttribute("fill", color);
+        shape.setAttribute("stroke", "#fbfcfa");
+        shape.setAttribute("stroke-width", "1.4");
+        group.appendChild(shape);
+        const text = mapSvgNode("text", { x, y: shapeY - 13, class: "map-character-name" });
+        text.textContent = label + (transit ? " → " + transit : "");
+        group.appendChild(text);
+        characterLayer.appendChild(group);
+    };
+
+    const playerByName = new Map(players.map((player, index) => [player.name, { ...player, index }]));
+    regions.forEach((region) => {
+        const point = project(layout.get(region.id));
+        const occupants = players.filter((player) => player.region === region.id && !player.in_transit_to);
+        occupants.forEach((player, occupantIndex) => {
+            const count = occupants.length;
+            const angle = -Math.PI / 2 + (occupantIndex - (count - 1) / 2) * 0.82;
+            const x = point.x + Math.cos(angle) * 43;
+            const y = point.y + Math.sin(angle) * 15;
+            const color = colorByName.get(player.name) || MAP_PLAYER_COLORS[player.index % MAP_PLAYER_COLORS.length];
+            characterAt(x, y, color, playerByName.get(player.name)?.index || 0, player.name, null, player.name === myCharacter);
+        });
+    });
+    players.filter((player) => player.in_transit_to).forEach((player) => {
+        const origin = layout.get(player.region);
+        const target = layout.get(player.in_transit_to);
+        if (!origin) {
+            return;
+        }
+        const a = project(origin);
+        const b = target ? project(target) : a;
+        const x = (a.x + b.x) / 2;
+        const y = (a.y + b.y) / 2 - 4;
+        const color = colorByName.get(player.name) || MAP_PLAYER_COLORS[0];
+        characterAt(
+            x,
+            y,
+            color,
+            playerByName.get(player.name)?.index || 0,
+            player.name,
+            regionById.get(player.in_transit_to)?.name || player.in_transit_to,
+            player.name === myCharacter,
+        );
+    });
+    svg.appendChild(characterLayer);
+    stage.append(viewTag, svg);
+
+    const detail = document.createElement("aside");
+    detail.className = "map-detail";
+    scene.append(legend, stage);
+    shell.append(scene, detail);
+    body.appendChild(shell);
+
+    let selectedId = null;
+    function selectRegion(regionId) {
+        const region = regionById.get(regionId);
+        if (!region) {
+            return;
+        }
+        selectedId = regionId;
+        for (const [id, group] of nodeGroups) {
+            group.classList.toggle("is-selected", id === selectedId);
+        }
+        detail.replaceChildren();
+        const head = document.createElement("div");
+        head.className = "map-detail-head";
+        const title = document.createElement("h3");
+        title.textContent = region.name;
+        const badge = document.createElement("span");
+        const hasItems = (region.items || []).length > 0;
+        badge.className = "map-detail-badge " + (hasItems ? "has-items" : "no-items");
+        badge.textContent = hasItems ? "有道具" : "无道具";
+        head.append(title, badge);
+        detail.appendChild(head);
+
+        const inRegion = players.filter((player) => player.region === region.id);
+        const presence = document.createElement("p");
+        presence.className = "map-detail-presence";
+        presence.textContent = inRegion.length
+            ? "在场：" + inRegion.map((player) => player.name + (player.in_transit_to ? "（在途）" : "")).join("、")
+            : "目前没有角色在此。";
+        detail.appendChild(presence);
+
+        const items = region.items || [];
+        if (items.length) {
+            detail.appendChild(mapBlock(
+                "道具",
+                items.map((item) => {
+                    const line = document.createElement("div");
+                    line.className = "map-item";
+                    const label = document.createElement("span");
+                    label.className = "map-item-name";
+                    label.textContent = item.name;
+                    line.appendChild(label);
+                    if (item.key_item) line.appendChild(mapChip("关键", "key"));
+                    if (item.clue) line.appendChild(mapChip("线索", "clue"));
+                    if (item.carryable === false) line.appendChild(mapChip("不可携带", "locked"));
+                    if (item.investigated) line.appendChild(mapChip("已调查", "done"));
+                    if (item.summary) {
+                        const summary = document.createElement("span");
+                        summary.className = "map-item-summary";
+                        summary.textContent = item.summary;
+                        line.appendChild(summary);
+                    }
+                    if (item.investigated && item.detail) {
+                        const itemDetail = document.createElement("div");
+                        itemDetail.className = "map-item-detail";
+                        itemDetail.textContent = item.detail;
+                        line.appendChild(itemDetail);
+                    }
+                    return line;
+                }),
+            ));
+        } else {
+            const empty = document.createElement("p");
+            empty.className = "map-detail-empty";
+            empty.textContent = "没有发现道具。";
+            detail.appendChild(empty);
+        }
+
+        const reachable = region.reachable || [];
+        if (reachable.length) {
+            detail.appendChild(mapBlock(
+                "可前往",
+                reachable.map((target) => mapChip(target.name)),
+            ));
+        }
+        const locked = region.locked || [];
+        if (locked.length) {
+            detail.appendChild(mapBlock(
+                "需条件",
+                locked.map((target) => mapChip(target.name, "locked")),
+            ));
+        }
+    }
+
+    const myPlayer = players.find((player) => player.name === myCharacter);
+    selectRegion(myPlayer?.region || players[0]?.region || regions[0].id);
 }
 
 function openCodex() {
@@ -1146,7 +1549,6 @@ function roomWasClosed(message) {
     elements.mobileMenuButton.hidden = true;
     elements.inviteBox.hidden = true;
     elements.hostModal.hidden = true;
-    elements.characterCardButton.hidden = true;
     elements.characterCardModal.hidden = true;
     elements.keyRequiredModal.hidden = true;
     hideTruthUI();
@@ -1163,8 +1565,7 @@ function roomWasClosed(message) {
     elements.codexButton.hidden = true;
     elements.codexModal.hidden = true;
     ownCharacterCard = null;
-    elements.loginModal.hidden = false;
-    elements.loginError.textContent = message;
+    showLandingAgain(message);
     elements.connectionStatus.textContent = "离线";
 }
 
@@ -1184,7 +1585,6 @@ function wasRemoved(message) {
     elements.inviteBox.hidden = true;
     elements.hostModal.hidden = true;
     elements.skipVoteBox.hidden = true;
-    elements.characterCardButton.hidden = true;
     elements.characterCardModal.hidden = true;
     elements.keyRequiredModal.hidden = true;
     hideTruthUI();
@@ -1201,8 +1601,7 @@ function wasRemoved(message) {
     elements.codexButton.hidden = true;
     elements.codexModal.hidden = true;
     ownCharacterCard = null;
-    elements.loginModal.hidden = false;
-    elements.loginError.textContent = message;
+    showLandingAgain(message);
     elements.connectionStatus.textContent = "已连接——重新加入即可继续游戏";
 }
 
@@ -1239,7 +1638,6 @@ function leaveRoom() {
     elements.inviteBox.hidden = true;
     elements.hostModal.hidden = true;
     elements.skipVoteBox.hidden = true;
-    elements.characterCardButton.hidden = true;
     elements.characterCardModal.hidden = true;
     elements.keyRequiredModal.hidden = true;
     hideTruthUI();
@@ -1256,8 +1654,7 @@ function leaveRoom() {
     elements.codexButton.hidden = true;
     elements.codexModal.hidden = true;
     ownCharacterCard = null;
-    elements.loginModal.hidden = false;
-    elements.loginError.textContent = "你已离开房间，它仍在运行，可用邀请码重新加入。";
+    showLandingAgain("你已离开房间，它仍在运行，可用邀请码重新加入。");
     elements.connectionStatus.textContent = "已离开房间";
     if (ws && ws.readyState === WebSocket.OPEN) {
         ws.close();
@@ -1278,7 +1675,14 @@ function cacheOwnCharacterCard(payload) {
     const characters = payload.characters || [];
     const mine = characters.find((char) => char.claimed_by === myName);
     ownCharacterCard = mine || null;
-    elements.characterCardButton.hidden = amSpectator || !ownCharacterCard;
+    if (mine) {
+        // The host claims a seat after joining, so auth_ok never reported a
+        // character; a successful claim must clear spectator mode.
+        amSpectator = false;
+    }
+    if (elements.characterCardButton) {
+        elements.characterCardButton.hidden = amSpectator || !ownCharacterCard;
+    }
 }
 
 function rememberOwnCharacter(payload) {
@@ -1440,7 +1844,6 @@ elements.mapClose.addEventListener("click", closeMap);
 elements.codexButton.addEventListener("click", openCodex);
 elements.codexClose.addEventListener("click", closeCodex);
 
-elements.characterCardButton.addEventListener("click", openCharacterCard);
 elements.characterCardClose.addEventListener("click", closeCharacterCard);
 elements.characterCardForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -1581,7 +1984,7 @@ function applySnapshot(payload) {
         : (isHost ? "· 主持人" : "· 观众");
     elements.identity.textContent = `${payload.name} ${role}`;
     if (payload.scenario_title) {
-        elements.title.textContent = payload.scenario_title || "Anyworld";
+        elements.title.textContent = payload.scenario_title || "MultiTavern";
         document.title = displayGameTitle(payload.scenario_title);
     }
     const emptyLog = !elements.log.querySelector(":scope > :not(#game-banner)");
@@ -1670,6 +2073,7 @@ function handleMessage(message) {
         elements.chatInput.disabled = false;
         elements.connectionStatus.textContent = "在线";
         elements.loginModal.hidden = true;
+        elements.loginError.hidden = true;
         elements.grid.hidden = false;
         elements.leaveRoomButton.hidden = false;
         elements.mobileMenuButton.hidden = false;
@@ -1741,7 +2145,7 @@ function handleMessage(message) {
             setGameClock(payload.game_time);
         }
         if (payload.round_title) {
-            elements.title.textContent = payload.round_title || "Anyworld";
+            elements.title.textContent = payload.round_title || "MultiTavern";
             document.title = displayGameTitle(payload.round_title);
         }
         if (strictMode) {
@@ -1858,15 +2262,29 @@ function handleMessage(message) {
         }
     } else if (type === "scenario_ready") {
         roomState = "AWAITING_PLAYERS";
+        hasMap = Boolean(payload.has_map);
+        hasCodex = Boolean(payload.has_codex);
+        updateMapButton();
+        updateCodexButton();
         updateTruthButton();
         elements.hostModal.hidden = false;
+        if (elements.loginModal) {
+            elements.loginModal.hidden = true;
+        }
+        elements.hostModal.scrollTop = 0;
         elements.endGameButton.hidden = true;
         elements.title.textContent = payload.title;
         elements.hostStatus.textContent = `「${payload.title}」已就绪。`;
         elements.scenarioStep.hidden = true;
         elements.lobbyStep.hidden = false;
+        elements.hostModal.classList.add("is-lobby");
+        const pageTitle = document.getElementById("config-page-title");
+        if (pageTitle) {
+            pageTitle.textContent = "房间已就绪";
+        }
         if (payload.characters) {
             renderPlayers({ players: [], characters: payload.characters });
+            cacheOwnCharacterCard(payload);
             rememberOwnCharacter(payload);
         }
         elements.scenarioSubmit.disabled = false;
@@ -2015,6 +2433,458 @@ function scheduleReconnect() {
     reconnectTimer = window.setTimeout(connectSocket, delay);
 }
 
+const PUBLIC_ROOM_LABELS = {
+    SCENARIO_INJECTION: "正在准备",
+    AWAITING_PLAYERS: "等待玩家",
+    ACTIVE_TURN: "进行中",
+    AWAITING_LLM: "结算中",
+    ENDED: "已结束",
+};
+
+function publicRoomStateLabel(state) {
+    return PUBLIC_ROOM_LABELS[state] || state || "未知";
+}
+
+
+const LANDING_PATHS = {
+    home: "/",
+    create: "/create",
+    join: "/join",
+    rooms: "/rooms",
+};
+
+const LANDING_TITLES = {
+    home: "MultiTavern",
+    create: "创建房间 · MultiTavern",
+    join: "加入房间 · MultiTavern",
+    rooms: "公开房间 · MultiTavern",
+};
+
+function landingPageFromLocation() {
+    const path = (window.location && window.location.pathname) || "/";
+    if (path === "/create" || path === "/create/") return "create";
+    if (path === "/join" || path === "/join/") return "join";
+    if (path === "/rooms" || path === "/rooms/") return "rooms";
+    return "home";
+}
+
+let landingErrorTimer = null;
+
+function setLandingError(message) {
+    if (!elements.loginError) {
+        return;
+    }
+    if (landingErrorTimer !== null && typeof window.clearTimeout === "function") {
+        window.clearTimeout(landingErrorTimer);
+        landingErrorTimer = null;
+    }
+    elements.loginError.textContent = message || "";
+    elements.loginError.hidden = !message;
+    if (message && typeof window.setTimeout === "function") {
+        landingErrorTimer = window.setTimeout(() => {
+            if (elements.loginError.textContent === message) {
+                elements.loginError.hidden = true;
+            }
+            landingErrorTimer = null;
+        }, 3600);
+    }
+}
+
+function updatePageLinks(page) {
+    if (!document.querySelectorAll) {
+        return;
+    }
+    document.querySelectorAll("[data-page-link]").forEach((link) => {
+        if (link.dataset.pageLink === page) {
+            link.setAttribute("aria-current", "page");
+        } else {
+            link.removeAttribute("aria-current");
+        }
+    });
+}
+
+function renderLandingPage(page, { focus = false } = {}) {
+    const views = {
+        home: elements.homeView,
+        create: elements.createView,
+        join: elements.joinView,
+        rooms: elements.roomsView,
+    };
+    landingPage = views[page] ? page : "home";
+    if (elements.loginModal) {
+        elements.loginModal.dataset.page = landingPage;
+    }
+    for (const [name, view] of Object.entries(views)) {
+        if (view) {
+            view.hidden = name !== landingPage;
+        }
+    }
+    document.title = LANDING_TITLES[landingPage] || "MultiTavern";
+    if (elements.loginModal) {
+        elements.loginModal.scrollTop = 0;
+    }
+    setLandingError("");
+    updatePageLinks(landingPage);
+    if (landingPage === "rooms") {
+        refreshPublicRooms();
+    }
+    if (focus && landingPage === "join" && elements.name) {
+        elements.name.focus();
+    }
+}
+
+function navigate(page, { replace = false } = {}) {
+    const target = LANDING_PATHS[page] ? page : "home";
+    const path = LANDING_PATHS[target];
+    if (
+        window.history &&
+        typeof window.history.pushState === "function" &&
+        window.location.pathname !== path
+    ) {
+        const method = replace ? "replaceState" : "pushState";
+        window.history[method]({ page: target }, "", path);
+    }
+    renderLandingPage(target);
+}
+
+function showLandingAgain(message = "") {
+    if (elements.loginModal) {
+        elements.loginModal.hidden = false;
+    }
+    navigate("home", { replace: true });
+    if (message) {
+        setLandingError(message);
+    }
+}
+
+function joinPublicRoom(room) {
+    if (!room || !room.invite_code || room.accepting_new === false) {
+        return;
+    }
+    navigate("join");
+    elements.invite.value = room.invite_code;
+    elements.joinStep.hidden = true;
+    elements.joinStatus.textContent = "";
+    if (!elements.name.value.trim()) {
+        elements.name.focus();
+    } else {
+        elements.joinSubmit.focus();
+    }
+}
+
+
+function renderPublicRooms(rooms) {
+    elements.publicRoomsList.replaceChildren();
+    if (!Array.isArray(rooms) || rooms.length === 0) {
+        elements.publicRoomsStatus.textContent = "0 桌";
+        const empty = document.createElement("div");
+        empty.className = "landing-empty";
+        const title = document.createElement("strong");
+        title.dataset.inkText = "还没有公开房间。";
+        title.textContent = title.dataset.inkText;
+        const hint = document.createElement("span");
+        hint.textContent = "创建一间并选择“公开”，或让房主把邀请码发给你。";
+        const create = document.createElement("button");
+        create.type = "button";
+        create.className = "landing-empty-action";
+        const createLabel = document.createElement("span");
+        createLabel.className = "ink-button-label";
+        createLabel.dataset.inkText = "创建房间";
+        createLabel.textContent = createLabel.dataset.inkText;
+        create.appendChild(createLabel);
+        create.addEventListener("click", () => navigate("create"));
+        empty.append(title, hint, create);
+        elements.publicRoomsList.appendChild(empty);
+        return;
+    }
+    elements.publicRoomsStatus.textContent = rooms.length + " 桌";
+    for (const room of rooms) {
+        const tile = document.createElement("article");
+        tile.className = "room-tile";
+
+        const state = document.createElement("div");
+        state.className = "room-tile-state";
+        state.textContent = publicRoomStateLabel(room.state);
+
+        const title = document.createElement("h2");
+        title.className = "room-tile-title";
+        title.dataset.inkText = room.title || "等待剧情初始化";
+        title.textContent = title.dataset.inkText;
+
+        const meta = document.createElement("p");
+        meta.className = "room-tile-meta";
+        const host = room.host ? "房主 " + room.host : "房主准备中";
+        const players = Number.isFinite(room.players) ? room.players : 0;
+        const characters = Number.isFinite(room.characters) ? room.characters : 0;
+        meta.textContent = host + " · " + players + " 人" +
+            (characters ? " / " + characters + " 个角色" : "");
+
+        const join = document.createElement("button");
+        join.type = "button";
+        join.className = "room-tile-join";
+        join.disabled = room.accepting_new === false;
+        const joinLabel = document.createElement("span");
+        joinLabel.className = "ink-button-label";
+        joinLabel.dataset.inkText = room.accepting_new === false ? "暂不可加入" : "加入";
+        joinLabel.textContent = joinLabel.dataset.inkText;
+        join.appendChild(joinLabel);
+        join.addEventListener("click", () => joinPublicRoom(room));
+
+        tile.append(state, title, meta, join);
+        elements.publicRoomsList.appendChild(tile);
+    }
+}
+
+async function refreshPublicRooms() {
+    if (
+        typeof fetch !== "function" ||
+        !elements.publicRoomsList ||
+        authenticated ||
+        elements.loginModal.hidden ||
+        landingPage !== "rooms"
+    ) {
+        return;
+    }
+    if (publicRoomsLoading) {
+        return;
+    }
+    publicRoomsLoading = true;
+    try {
+        const response = await fetch("/api/rooms/public?_=" + Date.now(), {
+            cache: "no-store",
+            headers: { Accept: "application/json" },
+        });
+        if (!response.ok) {
+            throw new Error("HTTP " + response.status);
+        }
+        const payload = await response.json();
+        const rooms = Array.isArray(payload.rooms) ? payload.rooms : [];
+        const signature = JSON.stringify(rooms);
+        if (signature !== lastPublicRoomsSignature) {
+            lastPublicRoomsSignature = signature;
+            renderPublicRooms(rooms);
+        }
+    } catch {
+        lastPublicRoomsSignature = null;
+        elements.publicRoomsStatus.textContent = "载入失败";
+        elements.publicRoomsList.replaceChildren();
+        const empty = document.createElement("div");
+        empty.className = "landing-empty";
+        const title = document.createElement("strong");
+        title.dataset.inkText = "暂时无法载入。";
+        title.textContent = title.dataset.inkText;
+        const hint = document.createElement("span");
+        hint.textContent = "稍后点“刷新”重试。";
+        empty.append(title, hint);
+        elements.publicRoomsList.appendChild(empty);
+    } finally {
+        publicRoomsLoading = false;
+    }
+}
+
+function startPublicRoomsPolling() {
+    if (publicRoomsTimer !== null || typeof window.setInterval !== "function") {
+        return;
+    }
+    publicRoomsTimer = window.setInterval(() => {
+        if (!document.hidden && landingPage === "rooms") {
+            refreshPublicRooms();
+        }
+    }, 10000);
+}
+
+async function submitCreate(event) {
+    event.preventDefault();
+    setLandingError("");
+    try {
+        const name = elements.createName.value.trim();
+        if (!name) {
+            setLandingError("请填写玩家名字。");
+            elements.createName.focus();
+            return;
+        }
+        const identity = rememberedIdentity(name);
+        const targetId = identity?.clientId || clientId;
+        const reconnectToken = identity?.reconnectToken || (
+            savedAuth?.name?.toLowerCase() === name.toLowerCase()
+                ? savedAuth.reconnect_token : undefined
+        );
+        const auth = {
+            name,
+            reconnect_token: reconnectToken,
+            public: Boolean(elements.publicRoom?.checked),
+        };
+        if (elements.llmModeBorrow.checked) {
+            auth.llm = { mode: "borrow" };
+        } else {
+            const apiKey = elements.apiKey.value.trim();
+            if (!apiKey) {
+                setLandingError("请填入你自己的 API Key，或选择借用服主的 API。");
+                elements.apiKey.focus();
+                return;
+            }
+            const llm = { mode: "own", api_key: apiKey };
+            const endpoint = elements.llmEndpoint.value.trim();
+            if (endpoint) {
+                llm.endpoint = endpoint;
+                // The provider picker was redundant for custom endpoints. Keep
+                // native OpenAI semantics only where they are unambiguous.
+                try {
+                    if (
+                        typeof URL === "function" &&
+                        new URL(endpoint).hostname.toLowerCase() === "api.openai.com"
+                    ) {
+                        llm.provider = "openai";
+                    }
+                } catch (error) {
+                    // Endpoint validation is performed by the server.
+                }
+            }
+            const model = elements.llmModel.value.trim();
+            if (model) llm.model_name = model;
+            auth.llm = llm;
+        }
+        roomClosed = false;
+        leftRoom = false;
+        if (targetId !== clientId || ws.readyState !== WebSocket.OPEN) {
+            clientId = targetId;
+            writeStored("sessionStorage", "artificialDungeonClientId", clientId);
+            pendingCreateAuth = auth;
+            connectSocket();
+        } else {
+            send("create_room", auth);
+        }
+    } catch (error) {
+        showError(error.message);
+    }
+}
+
+function renderModelScanResult(models) {
+    elements.modelScanResult.replaceChildren();
+    for (const rawModel of models) {
+        if (typeof rawModel !== "string" || !rawModel.trim()) {
+            continue;
+        }
+        const model = rawModel.trim();
+        const option = document.createElement("button");
+        option.type = "button";
+        option.className = "model-option";
+        const label = document.createElement("span");
+        label.className = "ink-button-label";
+        label.dataset.inkText = model;
+        label.textContent = model;
+        option.appendChild(label);
+        option.title = model;
+        option.addEventListener("click", () => {
+            elements.llmModel.value = model;
+            for (const item of elements.modelScanResult.querySelectorAll(".model-option")) {
+                item.classList.toggle("is-active", item === option);
+            }
+            elements.llmModel.focus();
+        });
+        elements.modelScanResult.appendChild(option);
+    }
+    elements.modelScanResult.hidden = elements.modelScanResult.children.length === 0;
+}
+
+async function scanAvailableModels() {
+    if (!elements.scanModels || !elements.modelScanResult) {
+        return;
+    }
+    const apiKey = elements.apiKey.value.trim();
+    if (!apiKey) {
+        setLandingError("请先填入 API Key，再扫描可用模型。");
+        elements.apiKey.focus();
+        return;
+    }
+    if (typeof fetch !== "function") {
+        setLandingError("当前环境不支持扫描模型。");
+        return;
+    }
+    const endpoint = elements.llmEndpoint.value.trim();
+    const scanLabel = elements.scanModels.querySelector("#scan-models-label");
+    const label = scanLabel ? scanLabel.textContent : elements.scanModels.textContent;
+    elements.scanModels.disabled = true;
+    if (scanLabel) {
+        scanLabel.textContent = "扫描中…";
+        scanLabel.dataset.inkText = "扫描中…";
+    } else {
+        elements.scanModels.textContent = "扫描中…";
+    }
+    elements.modelScanResult.hidden = true;
+    try {
+        const response = await fetch("/api/llm/models", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ api_key: apiKey, endpoint: endpoint || undefined }),
+        });
+        let payload = {};
+        try {
+            payload = await response.json();
+        } catch (error) {
+            payload = {};
+        }
+        if (!response.ok) {
+            throw new Error(payload.error || "扫描模型失败，请检查 endpoint。");
+        }
+        const models = Array.isArray(payload.models) ? payload.models : [];
+        if (!models.length) {
+            throw new Error("该服务商没有返回可用模型。");
+        }
+        renderModelScanResult(models);
+    } catch (error) {
+        setLandingError(error.message || "扫描模型失败。");
+    } finally {
+        elements.scanModels.disabled = false;
+        if (scanLabel) {
+            scanLabel.textContent = label;
+            scanLabel.dataset.inkText = label;
+        } else {
+            elements.scanModels.textContent = label;
+        }
+    }
+}
+
+async function submitJoin(event) {
+    event.preventDefault();
+    setLandingError("");
+    try {
+        const name = elements.name.value.trim();
+        if (!name) {
+            setLandingError("请填写玩家名字。");
+            elements.name.focus();
+            return;
+        }
+        const inviteCode = elements.invite.value.trim();
+        if (!inviteCode) {
+            setLandingError("请输入邀请码，或从公开房间页面选择一桌。");
+            elements.invite.focus();
+            return;
+        }
+        pendingJoin = { name, invite_code: inviteCode };
+        roomClosed = false;
+        leftRoom = false;
+        elements.joinStep.hidden = false;
+        elements.joinStatus.textContent = "正在加载角色…";
+        elements.joinCharacterList.replaceChildren();
+        if (ws.readyState !== WebSocket.OPEN) {
+            pendingRoomInfo = inviteCode;
+            connectSocket();
+        } else {
+            send("room_info", { invite_code: inviteCode });
+        }
+    } catch (error) {
+        showError(error.message);
+    }
+}
+
+function syncLlmMode() {
+    const borrow = Boolean(elements.llmModeBorrow?.checked);
+    if (elements.llmOwnFields) {
+        elements.llmOwnFields.hidden = borrow;
+    }
+}
+
 if (document.addEventListener) {
     document.addEventListener("visibilitychange", () => {
         if (!document.hidden && reconnectWhenVisible) {
@@ -2023,76 +2893,409 @@ if (document.addEventListener) {
             scheduleReconnect();
         }
     });
+    document.addEventListener("click", (event) => {
+        const link = event.target && event.target.closest
+            ? event.target.closest("[data-page-link]")
+            : null;
+        if (!link || !elements.loginModal || !elements.loginModal.contains(link)) {
+            return;
+        }
+        event.preventDefault();
+        navigate(link.dataset.pageLink);
+    });
+    window.addEventListener("popstate", () => {
+        if (!elements.loginModal.hidden) {
+            renderLandingPage(landingPageFromLocation());
+        }
+    });
+}
+
+function setupCreateInkExploration() {
+    const view = document.getElementById("create-view");
+    if (!view) {
+        return;
+    }
+    const selector = [
+        ".page-head h1",
+        ".section-head h2",
+        ".section-body > label",
+        ".subfields > label",
+        ".field-grid label",
+        ".advanced summary",
+        ".option-card",
+        ".option-copy strong",
+        ".back-button",
+        ".button-primary",
+        ".button-scan",
+        ".model-option",
+        ".ink-button-label",
+    ].join(",");
+    const textSelector = [
+        ".page-head h1",
+        ".section-head h2",
+        ".section-body > label",
+        ".subfields > label",
+        ".field-grid label",
+        ".advanced summary",
+        ".option-copy strong",
+        ".ink-button-label",
+    ].join(",");
+    view.querySelectorAll(textSelector).forEach((node) => {
+        node.dataset.inkText = (node.textContent || "").trim();
+    });
+    const updateSpot = (event) => {
+        if (!event || typeof event.clientX !== "number") {
+            return;
+        }
+        let node = event.target;
+        while (node && node !== view.parentElement) {
+            if (node.nodeType === 1 && node.matches(selector)) {
+                const rect = node.getBoundingClientRect();
+                node.style.setProperty("--ink-x", (event.clientX - rect.left) + "px");
+                node.style.setProperty("--ink-y", (event.clientY - rect.top) + "px");
+            }
+            if (
+                node.nodeType === 1 &&
+                node.matches("#copy-invite, #edit-scenario-button, .modal-foot button")
+            ) {
+                for (const label of node.querySelectorAll(".ink-button-label")) {
+                    const labelRect = label.getBoundingClientRect();
+                    label.style.setProperty("--ink-x", (event.clientX - labelRect.left) + "px");
+                    label.style.setProperty("--ink-y", (event.clientY - labelRect.top) + "px");
+                }
+            }
+            if (node === view) {
+                break;
+            }
+            node = node.parentElement;
+        }
+    };
+    view.addEventListener("pointerover", updateSpot);
+    view.addEventListener("pointermove", updateSpot);
+}
+
+function setupJoinInkExploration() {
+    const view = document.getElementById("join-view");
+    if (!view) {
+        return;
+    }
+    const textSelector = [
+        ".page-head h1",
+        ".section-head h2",
+        ".section-body > label",
+        ".join-title",
+        ".ink-button-label",
+    ].join(",");
+    view.querySelectorAll(textSelector).forEach((node) => {
+        if (!node.dataset.inkText) {
+            node.dataset.inkText = (node.textContent || "").trim();
+        }
+    });
+    const selector = [
+        ".page-head h1",
+        ".section-head h2",
+        ".section-body > label",
+        ".join-title",
+        ".ink-button-label",
+        ".button-primary",
+    ].join(",");
+    const updateSpot = (event) => {
+        if (!event || typeof event.clientX !== "number") {
+            return;
+        }
+        let node = event.target;
+        while (node && node !== view.parentElement) {
+            if (node.nodeType === 1 && node.matches(selector)) {
+                const rect = node.getBoundingClientRect();
+                node.style.setProperty("--ink-x", (event.clientX - rect.left) + "px");
+                node.style.setProperty("--ink-y", (event.clientY - rect.top) + "px");
+            }
+            if (node === view) {
+                break;
+            }
+            node = node.parentElement;
+        }
+    };
+    view.addEventListener("pointerover", updateSpot);
+    view.addEventListener("pointermove", updateSpot);
+}
+
+function setupRoomsInkExploration() {
+    const view = document.getElementById("rooms-view");
+    if (!view) {
+        return;
+    }
+    const textSelector = [
+        ".page-head h1",
+        ".ink-button-label",
+        ".room-tile-title",
+        ".landing-empty strong",
+    ].join(",");
+    view.querySelectorAll(textSelector).forEach((node) => {
+        if (!node.dataset.inkText) {
+            node.dataset.inkText = (node.textContent || "").trim();
+        }
+    });
+    const selector = [
+        ".page-head h1",
+        ".ink-button-label",
+        ".room-tile-title",
+        ".landing-empty strong",
+    ].join(",");
+    const updateSpot = (event) => {
+        if (!event || typeof event.clientX !== "number") {
+            return;
+        }
+        let node = event.target;
+        while (node && node !== view.parentElement) {
+            if (node.nodeType === 1 && node.matches(selector)) {
+                const rect = node.getBoundingClientRect();
+                node.style.setProperty("--ink-x", (event.clientX - rect.left) + "px");
+                node.style.setProperty("--ink-y", (event.clientY - rect.top) + "px");
+            }
+            if (node === view) {
+                break;
+            }
+            node = node.parentElement;
+        }
+    };
+    view.addEventListener("pointerover", updateSpot);
+    view.addEventListener("pointermove", updateSpot);
+}
+
+function setupHostInkExploration() {
+    const view = document.getElementById("host-modal");
+    if (!view) {
+        return;
+    }
+    const selector = [
+        "#lobby-step .ink-button-label",
+        ".modal-foot .ink-button-label",
+        "#start-button",
+        "#copy-invite",
+        "#edit-scenario-button",
+        ".modal-foot button",
+    ].join(",");
+    view.querySelectorAll("#lobby-step .ink-button-label, .modal-foot .ink-button-label").forEach((node) => {
+        if (!node.dataset.inkText) {
+            node.dataset.inkText = (node.textContent || "").trim();
+        }
+    });
+    const updateSpot = (event) => {
+        if (!event || typeof event.clientX !== "number") {
+            return;
+        }
+        let node = event.target;
+        while (node && node !== view.parentElement) {
+            if (node.nodeType === 1 && node.matches(selector)) {
+                const rect = node.getBoundingClientRect();
+                node.style.setProperty("--ink-x", (event.clientX - rect.left) + "px");
+                node.style.setProperty("--ink-y", (event.clientY - rect.top) + "px");
+            }
+            if (node === view) {
+                break;
+            }
+            node = node.parentElement;
+        }
+    };
+    view.addEventListener("pointerover", updateSpot);
+    view.addEventListener("pointermove", updateSpot);
+}
+
+function setupPlayResizers() {
+    const grid = document.getElementById("grid-container");
+    const chat = document.getElementById("chat-pane");
+    const main = document.getElementById("main-column");
+    const dock = document.getElementById("action-dock");
+    const chatHandle = document.getElementById("chat-resizer");
+    const mainHandle = document.getElementById("content-resizer");
+    const storyHandle = document.getElementById("story-resizer");
+    if (!grid || !chat || !main || !dock || !chatHandle || !mainHandle || !storyHandle) {
+        return;
+    }
+
+    const CHAT_KEY = "multitavern.play.chatWidth";
+    const MAIN_KEY = "multitavern.play.mainWidth";
+    const DOCK_KEY = "multitavern.play.dockHeight";
+    const defaults = { chat: 300, main: 760, dock: 154 };
+
+    const readStoredNumber = (key) => {
+        try {
+            const value = Number.parseFloat(window.localStorage.getItem(key) || "");
+            return Number.isFinite(value) ? value : null;
+        } catch (error) {
+            return null;
+        }
+    };
+
+    const clamp = (value, min, max) => Math.min(Math.max(value, min), Math.max(min, max));
+
+    const setChatWidth = (width) => {
+        const next = clamp(width, 220, Math.min(480, grid.clientWidth - 520));
+        grid.style.setProperty("--chat-width", Math.round(next) + "px");
+        chatHandle.setAttribute("aria-valuenow", String(Math.round(next)));
+        return next;
+    };
+
+    const setMainWidth = (width) => {
+        const chatWidth = chat.getBoundingClientRect().width || defaults.chat;
+        const available = grid.clientWidth - chatWidth - 6 - 24;
+        const next = clamp(width, 520, available);
+        grid.style.setProperty("--main-width", Math.round(next) + "px");
+        mainHandle.setAttribute("aria-valuenow", String(Math.round(next)));
+        return next;
+    };
+
+    const setDockHeight = (height) => {
+        const available = main.getBoundingClientRect().height - 180;
+        const next = clamp(height, 130, available);
+        grid.style.setProperty("--dock-height", Math.round(next) + "px");
+        storyHandle.setAttribute("aria-valuenow", String(Math.round(next)));
+        return next;
+    };
+
+    const storedChat = readStoredNumber(CHAT_KEY);
+    const storedMain = readStoredNumber(MAIN_KEY);
+    const storedDock = readStoredNumber(DOCK_KEY);
+    if (storedChat !== null) {
+        grid.style.setProperty("--chat-width", Math.round(storedChat) + "px");
+    }
+    if (storedMain !== null) {
+        grid.style.setProperty("--main-width", Math.round(storedMain) + "px");
+    }
+    if (storedDock !== null) {
+        grid.style.setProperty("--dock-height", Math.round(storedDock) + "px");
+    }
+
+    const save = (key, value) => {
+        try {
+            window.localStorage.setItem(key, String(Math.round(value)));
+        } catch (error) {
+            // Layout persistence is optional.
+        }
+    };
+
+    const beginDrag = (handle, mode, event) => {
+        if (event.button !== 0) {
+            return;
+        }
+        event.preventDefault();
+        const startX = event.clientX;
+        const startY = event.clientY;
+        const startChat = chat.getBoundingClientRect().width;
+        const startMain = main.getBoundingClientRect().width;
+        const startDock = dock.getBoundingClientRect().height;
+        const bodyClass = mode === "dock" ? "resizing-h" : "resizing-v";
+        document.body.classList.add(bodyClass);
+        handle.setPointerCapture(event.pointerId);
+
+        const onMove = (moveEvent) => {
+            if (mode === "chat") {
+                setChatWidth(startChat + (moveEvent.clientX - startX));
+                setMainWidth(main.getBoundingClientRect().width);
+            } else if (mode === "main") {
+                setMainWidth(startMain + (moveEvent.clientX - startX) * 2);
+            } else {
+                setDockHeight(startDock - (moveEvent.clientY - startY));
+            }
+        };
+
+        const onEnd = () => {
+            document.body.classList.remove(bodyClass);
+            handle.removeEventListener("pointermove", onMove);
+            handle.removeEventListener("pointerup", onEnd);
+            handle.removeEventListener("pointercancel", onEnd);
+            if (mode === "chat") {
+                save(CHAT_KEY, chat.getBoundingClientRect().width);
+            } else if (mode === "main") {
+                save(MAIN_KEY, main.getBoundingClientRect().width);
+            } else {
+                save(DOCK_KEY, dock.getBoundingClientRect().height);
+            }
+        };
+
+        handle.addEventListener("pointermove", onMove);
+        handle.addEventListener("pointerup", onEnd);
+        handle.addEventListener("pointercancel", onEnd);
+    };
+
+    chatHandle.addEventListener("pointerdown", (event) => beginDrag(chatHandle, "chat", event));
+    mainHandle.addEventListener("pointerdown", (event) => beginDrag(mainHandle, "main", event));
+    storyHandle.addEventListener("pointerdown", (event) => beginDrag(storyHandle, "dock", event));
+
+    const resetLayout = () => {
+        try {
+            window.localStorage.removeItem(CHAT_KEY);
+            window.localStorage.removeItem(MAIN_KEY);
+            window.localStorage.removeItem(DOCK_KEY);
+        } catch (error) {
+            // Layout persistence is optional.
+        }
+        grid.style.removeProperty("--chat-width");
+        grid.style.removeProperty("--main-width");
+        grid.style.removeProperty("--dock-height");
+    };
+
+    chatHandle.addEventListener("dblclick", resetLayout);
+    mainHandle.addEventListener("dblclick", resetLayout);
+    storyHandle.addEventListener("dblclick", resetLayout);
+}
+
+function setupHomeSpotlight() {
+    const surface = document.querySelector(".home-choices");
+    if (!surface) {
+        return;
+    }
+    const cards = Array.from(surface.querySelectorAll(".choice-card"));
+    const updateSpot = (event) => {
+        if (!event || typeof event.clientX !== "number") {
+            return;
+        }
+        const rect = surface.getBoundingClientRect();
+        surface.style.setProperty("--cursor-x", (event.clientX - rect.left) + "px");
+        surface.style.setProperty("--cursor-y", (event.clientY - rect.top) + "px");
+        for (const card of cards) {
+            const cardRect = card.getBoundingClientRect();
+            card.style.setProperty("--spot-x", (event.clientX - cardRect.left) + "px");
+            card.style.setProperty("--spot-y", (event.clientY - cardRect.top) + "px");
+        }
+    };
+    surface.addEventListener("pointerenter", updateSpot);
+    surface.addEventListener("pointermove", updateSpot);
+
+    const wordmark = document.querySelector(".wordmark");
+    const tavern = document.querySelector(".wordmark-bottom");
+    if (wordmark && tavern) {
+        const updateWordmark = (event) => {
+            if (!event || typeof event.clientX !== "number") {
+                return;
+            }
+            const rect = tavern.getBoundingClientRect();
+            tavern.style.setProperty("--word-x", (event.clientX - rect.left) + "px");
+            tavern.style.setProperty("--word-y", (event.clientY - rect.top) + "px");
+        };
+        wordmark.addEventListener("pointerenter", updateWordmark);
+        wordmark.addEventListener("pointermove", updateWordmark);
+    }
 }
 
 connectSocket();
 
-elements.loginForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    elements.loginError.textContent = "";
-    try {
-        const name = elements.name.value.trim();
-        if (loginMode === "create") {
-            const identity = rememberedIdentity(name);
-            const targetId = identity?.clientId || clientId;
-            const reconnectToken = identity?.reconnectToken || (
-                savedAuth?.name?.toLowerCase() === name.toLowerCase()
-                    ? savedAuth.reconnect_token : undefined
-            );
-            const auth = { name, reconnect_token: reconnectToken };
-            if (elements.llmModeBorrow.checked) {
-                auth.llm = { mode: "borrow" };
-            } else {
-                const apiKey = elements.apiKey.value.trim();
-                if (!apiKey) {
-                    elements.loginError.textContent =
-                        "请填入你自己的 API Key，或选择借用服主的 API。";
-                    return;
-                }
-                const llm = { mode: "own", api_key: apiKey };
-                const provider = elements.llmProvider.value;
-                if (provider) {
-                    llm.provider = provider;
-                }
-                const endpoint = elements.llmEndpoint.value.trim();
-                if (endpoint) {
-                    llm.endpoint = endpoint;
-                }
-                const model = elements.llmModel.value.trim();
-                if (model) {
-                    llm.model_name = model;
-                }
-                auth.llm = llm;
-            }
-            roomClosed = false;
-            leftRoom = false;
-            if (targetId !== clientId || ws.readyState !== WebSocket.OPEN) {
-                clientId = targetId;
-                writeStored("sessionStorage", "artificialDungeonClientId", clientId);
-                pendingCreateAuth = auth;
-                connectSocket();
-            } else {
-                send("create_room", auth);
-            }
-        } else {
-            const inviteCode = elements.invite.value.trim();
-            pendingJoin = { name, invite_code: inviteCode };
-            roomClosed = false;
-            leftRoom = false;
-            elements.joinStep.hidden = false;
-            elements.joinStatus.textContent = "正在加载角色…";
-            elements.joinCharacterList.replaceChildren();
-            if (ws.readyState !== WebSocket.OPEN) {
-                pendingRoomInfo = inviteCode;
-                connectSocket();
-            } else {
-                send("room_info", { invite_code: inviteCode });
-            }
-        }
-    } catch (error) {
-        showError(error.message);
-    }
-});
+elements.createForm.addEventListener("submit", submitCreate);
+elements.joinForm.addEventListener("submit", submitJoin);
+elements.llmModeOwn.addEventListener("change", syncLlmMode);
+elements.llmModeBorrow.addEventListener("change", syncLlmMode);
+elements.scanModels.addEventListener("click", scanAvailableModels);
+elements.refreshRooms.addEventListener("click", refreshPublicRooms);
+syncLlmMode();
+renderLandingPage(landingPageFromLocation());
+setupHomeSpotlight();
+setupCreateInkExploration();
+setupJoinInkExploration();
+setupRoomsInkExploration();
+setupHostInkExploration();
+setupPlayResizers();
+startPublicRoomsPolling();
 
 function renderCharacterPicker(payload) {
     const characters = payload.characters || [];
@@ -2109,7 +3312,11 @@ function renderCharacterPicker(payload) {
     const observer = document.createElement("button");
     observer.type = "button";
     observer.className = "character-option spectator-option";
-    observer.textContent = "旁观（不认领角色，仅观看）";
+    const observerLabel = document.createElement("span");
+    observerLabel.className = "ink-button-label";
+    observerLabel.dataset.inkText = "旁观（不认领角色，仅观看）";
+    observerLabel.textContent = observerLabel.dataset.inkText;
+    observer.appendChild(observerLabel);
     observer.addEventListener("click", () => chooseCharacter(""));
     elements.joinCharacterList.appendChild(observer);
     for (const char of characters) {
@@ -2125,9 +3332,13 @@ function renderCharacterPicker(payload) {
         const label = char.description
             ? `${char.name} — ${char.description}`
             : char.name;
-        item.textContent = char.claimed_by
+        const optionLabel = document.createElement("span");
+        optionLabel.className = "ink-button-label";
+        optionLabel.dataset.inkText = char.claimed_by
             ? `${label}（${char.claimed_by} 已认领）`
             : label;
+        optionLabel.textContent = optionLabel.dataset.inkText;
+        item.appendChild(optionLabel);
         if (!taken) {
             item.addEventListener("click", () => chooseCharacter(char.name));
         }
@@ -2167,24 +3378,6 @@ function chooseCharacter(character) {
     }
 }
 
-function setLoginMode(mode) {
-    loginMode = mode;
-    const creating = mode === "create";
-    elements.modeCreate.classList.toggle("active", creating);
-    elements.modeJoin.classList.toggle("active", !creating);
-    elements.invite.hidden = creating;
-    elements.inviteLabel.hidden = creating;
-    elements.llmFields.hidden = !creating;
-    elements.llmOwnFields.hidden = !creating || Boolean(elements.llmModeBorrow.checked);
-}
-
-elements.llmModeOwn.addEventListener("change", () => {
-    elements.llmOwnFields.hidden = false;
-});
-elements.llmModeBorrow.addEventListener("change", () => {
-    elements.llmOwnFields.hidden = true;
-});
-
 elements.keyRequiredForm.addEventListener("submit", (event) => {
     event.preventDefault();
     elements.keyRequiredError.textContent = "";
@@ -2197,9 +3390,6 @@ elements.keyRequiredForm.addEventListener("submit", (event) => {
         elements.keyRequiredInput.value = "";
     }
 });
-
-elements.modeCreate.addEventListener("click", () => setLoginMode("create"));
-elements.modeJoin.addEventListener("click", () => setLoginMode("join"));
 
 elements.copyInvite.addEventListener("click", () => {
     const code = elements.inviteCode.textContent;
@@ -2239,7 +3429,7 @@ function makeCharacterRow() {
     const details = document.createElement("details");
     details.className = "char-card-details";
     const summary = document.createElement("summary");
-    summary.textContent = "角色卡（性格/风格/示例台词，可留空）";
+    summary.textContent = "可留空";
     const personality = document.createElement("textarea");
     personality.className = "character-personality";
     personality.maxLength = 10000;
@@ -3108,40 +4298,6 @@ elements.exportConfigButton.addEventListener("click", () => {
     elements.hostStatus.textContent = "配置已导出。";
 });
 
-elements.importStButton.addEventListener("click", () => {
-    elements.importStInput.click();
-});
-
-elements.importStInput.addEventListener("change", async () => {
-    const file = elements.importStInput.files && elements.importStInput.files[0];
-    if (!file) {
-        return;
-    }
-    elements.hostStatus.textContent = "正在导入 ST 文件…";
-    try {
-        const response = await fetch("/st/import", { method: "POST", body: file });
-        const payload = await response.json();
-        if (!response.ok) {
-            throw new Error(payload.error || `HTTP ${response.status}`);
-        }
-        applyScenarioConfig(payload.config || {});
-        const warnings = payload.warnings || [];
-        if (warnings.length) {
-            elements.importWarnings.hidden = false;
-            elements.importWarnings.textContent =
-                "导入完成；以下内容未映射：" + warnings.join(" ");
-        } else {
-            elements.importWarnings.hidden = true;
-            elements.importWarnings.textContent = "";
-        }
-        elements.hostStatus.textContent = "ST 配置已导入。";
-    } catch (error) {
-        elements.hostStatus.textContent = `导入失败：${error.message}`;
-    } finally {
-        elements.importStInput.value = "";
-    }
-});
-
 elements.timeEnabled.addEventListener("change", () => {
     elements.timeConfigFields.hidden = !elements.timeEnabled.checked;
 });
@@ -3152,6 +4308,11 @@ elements.addLorebook.addEventListener("click", () => makeLorebookRow());
 elements.editScenarioButton.addEventListener("click", () => {
     elements.lobbyStep.hidden = true;
     elements.scenarioStep.hidden = false;
+    elements.hostModal.classList.remove("is-lobby");
+    const pageTitle = document.getElementById("config-page-title");
+    if (pageTitle) {
+        pageTitle.textContent = "房间配置";
+    }
     elements.hostStatus.textContent = "";
 });
 
@@ -3237,8 +4398,8 @@ function layoutQuickActions() {
         if (card.parentElement !== slot) {
             slot.appendChild(card);
         }
-    } else if (card.parentElement !== rail) {
-        rail.insertBefore(card, document.getElementById("host-card"));
+    } else if (card.parentElement !== rail || rail.firstElementChild !== card) {
+        rail.insertBefore(card, rail.firstElementChild);
     }
 }
 

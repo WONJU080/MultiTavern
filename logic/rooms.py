@@ -114,6 +114,14 @@ def _parse_llm_request(data: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     return False, overrides
 
 
+def _parse_room_public(data: dict[str, Any]) -> bool:
+    """Validate the optional public-room flag; old clients default to private."""
+    value = data.get("public", False)
+    if not isinstance(value, bool):
+        raise ValueError("'public' 必须是布尔值。")
+    return value
+
+
 def _build_room_llm_config(overrides: dict[str, Any]) -> Any:
     """Merge host overrides onto the server's default LLM configuration."""
     return settings.llm.model_copy(update=overrides)
@@ -135,6 +143,55 @@ async def _probe_llm_key(config: Any) -> None:
         raise ValueError(_KEY_INVALID_MESSAGE)
 
 
+async def list_available_models(api_key: object, endpoint: object = None) -> list[str]:
+    """List model ids for a host-supplied endpoint without persisting the key.
+
+    The request is made from the server so browser CORS cannot block a valid
+    endpoint. Only GET /models is attempted; the key is never logged or returned.
+    """
+    key = _parse_api_key(api_key)
+    if endpoint is None or (isinstance(endpoint, str) and not endpoint.strip()):
+        base = settings.llm.endpoint
+    else:
+        base = _validated_endpoint(endpoint)
+    url = base.rstrip("/")
+    if not url.endswith("/models"):
+        url += "/models"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url, headers={"Authorization": f"Bearer {key}"})
+    except httpx.HTTPError as exc:
+        raise RuntimeError("无法连接到该服务商，请检查 endpoint 或网络。") from exc
+    if response.status_code in (401, 403):
+        raise ValueError(_KEY_INVALID_MESSAGE)
+    if response.status_code == 404:
+        raise RuntimeError("该 endpoint 不支持模型列表（HTTP 404）。")
+    if response.status_code >= 400:
+        raise RuntimeError(f"读取模型列表失败（HTTP {response.status_code}）。")
+    if len(response.content) > 2_000_000:
+        raise RuntimeError("模型列表过大，已停止读取。")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise RuntimeError("服务商返回的模型列表无法解析。") from exc
+    items = payload.get("data") if isinstance(payload, dict) else payload
+    if items is None and isinstance(payload, dict):
+        items = payload.get("models")
+    if not isinstance(items, list):
+        raise RuntimeError("服务商返回的模型列表格式不正确。")
+    models: list[str] = []
+    for item in items:
+        model_id = item if isinstance(item, str) else None
+        if isinstance(item, dict):
+            model_id = item.get("id")
+        if isinstance(model_id, str) and model_id.strip():
+            models.append(model_id.strip()[:200])
+    unique = sorted(set(models), key=str.casefold)
+    if not unique:
+        raise ValueError("该服务商没有返回可用模型。")
+    return unique
+
+
 @dataclass
 class Room:
     """One independent game session: engine, connections and activity stamps."""
@@ -145,6 +202,7 @@ class Room:
     created_at: float
     last_active: float
     llm_meta: dict[str, Any] | None = None
+    public: bool = False
 
 
 def normalize_invite_code(value: object) -> str:
@@ -198,6 +256,39 @@ class RoomRegistry:
             if room.llm_meta is None and room.engine.state is not GameState.ENDED
         )
 
+    def public_rooms(self) -> list[dict[str, object]]:
+        """Return join-safe summaries of live public rooms, newest first."""
+        rows: list[dict[str, object]] = []
+        for room in self.rooms.values():
+            engine = room.engine
+            if not room.public or engine.state is GameState.ENDED:
+                continue
+            host = next(
+                (player.name for player in engine.players.values() if player.is_host),
+                "",
+            )
+            rows.append(
+                {
+                    "invite_code": format_invite_code(room.code),
+                    "title": engine.scenario_title or "等待剧情初始化",
+                    "state": engine.state.name,
+                    "accepting_new": engine.state
+                    in {
+                        GameState.AWAITING_PLAYERS,
+                        GameState.ACTIVE_TURN,
+                        GameState.AWAITING_LLM,
+                    },
+                    "host": host,
+                    "players": len(engine.players) + len(engine.pending_players),
+                    "characters": len(engine.cast),
+                    "created_at": room.created_at,
+                }
+            )
+        rows.sort(key=lambda row: float(row["created_at"]), reverse=True)
+        for row in rows:
+            row.pop("created_at", None)
+        return rows
+
     def _apply_room_config(self, engine: GameEngine, llm_config: Any) -> None:
         """Hand a room's own LLM configuration to its resolver when supported."""
         apply = getattr(engine.resolver, "apply_llm_config", None)
@@ -217,6 +308,7 @@ class RoomRegistry:
         host-supplied key is always allowed. Room creation has no password gate.
         """
         uses_server_key, overrides = _parse_llm_request(data)
+        public = _parse_room_public(data)
         room_limit = settings.server.max_rooms
         if room_limit is not None and len(self.rooms) + self._pending_creations >= room_limit:
             raise ValueError(_ROOM_LIMIT_MESSAGE)
@@ -257,6 +349,7 @@ class RoomRegistry:
             created_at=time(),
             last_active=time(),
             llm_meta=llm_meta,
+            public=public,
         )
         engine.room_code = format_invite_code(code)
         registry = self
@@ -322,7 +415,11 @@ class RoomRegistry:
         """Persist a room's state to disk atomically, encrypting host credentials."""
         try:
             ROOMS_DIR.mkdir(parents=True, exist_ok=True)
-            data = {"code": room.code, **room.engine.to_persistent_dict()}
+            data = {
+                "code": room.code,
+                "public": room.public,
+                **room.engine.to_persistent_dict(),
+            }
             if room.llm_meta is not None:
                 data["llm"] = dict(room.llm_meta)
             tmp = self._room_path(room.code).with_suffix(".tmp")
@@ -364,6 +461,7 @@ class RoomRegistry:
                     created_at=time(),
                     last_active=time(),
                     llm_meta=llm_meta,
+                    public=bool(data.get("public", False)),
                 )
                 registry = self
 

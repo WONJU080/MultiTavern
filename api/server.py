@@ -22,7 +22,7 @@ from core.config import settings
 from core.schemas import ClientPayload, ServerEvent
 from logic.llm_manager import LLMContextManager
 from logic.lobby import parse_cast, parse_lorebook, parse_prompt_blocks, parse_sampling
-from logic.rooms import Room, RoomRegistry, format_invite_code
+from logic.rooms import Room, RoomRegistry, format_invite_code, list_available_models
 from logic.st_import import convert_bytes
 
 LOGGER = logging.getLogger(__name__)
@@ -92,7 +92,7 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
             await registry.close_all()
             await manager.close()
 
-    application = FastAPI(title="Anyworld", lifespan=lifespan)
+    application = FastAPI(title="MultiTavern", lifespan=lifespan)
     application.mount("/static", StaticFiles(directory=PROJECT_ROOT / "static"), name="static")
     templates = Jinja2Templates(directory=PROJECT_ROOT / "templates")
 
@@ -102,6 +102,21 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
         response = templates.TemplateResponse(request=request, name="index.html")
         response.headers["Cache-Control"] = "no-store, must-revalidate"
         return response
+
+    @application.get("/create", response_class=HTMLResponse)
+    async def get_create(request: Request) -> HTMLResponse:
+        """Serve the SPA entry for the create-room page."""
+        return await get_index(request)
+
+    @application.get("/join", response_class=HTMLResponse)
+    async def get_join(request: Request) -> HTMLResponse:
+        """Serve the SPA entry for the invite-code join page."""
+        return await get_index(request)
+
+    @application.get("/rooms", response_class=HTMLResponse)
+    async def get_rooms(request: Request) -> HTMLResponse:
+        """Serve the SPA entry for the public-rooms page."""
+        return await get_index(request)
 
     @application.get("/admin/rooms", response_class=HTMLResponse)
     async def admin_rooms(request: Request) -> HTMLResponse:
@@ -160,6 +175,38 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
                 status_code=404,
             )
         return FileResponse(path, media_type="text/html")
+
+    @application.get("/api/rooms/public")
+    async def public_rooms(request: Request) -> JSONResponse:
+        """List public rooms for the landing page without exposing private rooms."""
+        response = JSONResponse(
+            {"rooms": request.app.state.registry.public_rooms()},
+            headers={"Cache-Control": "no-store"},
+        )
+        return response
+
+    @application.post("/api/llm/models")
+    async def llm_models(request: Request) -> JSONResponse:
+        """List models for an API key without storing the key or guessing a provider."""
+        try:
+            data = await request.json()
+        except ValueError:
+            return JSONResponse({"error": "请求体必须是 JSON。"}, status_code=400)
+        if not isinstance(data, dict):
+            return JSONResponse({"error": "请求体必须是对象。"}, status_code=400)
+        try:
+            models = await list_available_models(
+                data.get("api_key"),
+                data.get("endpoint"),
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except RuntimeError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=502)
+        return JSONResponse(
+            {"models": models},
+            headers={"Cache-Control": "no-store"},
+        )
 
     @application.post("/st/import")
     async def st_import(request: Request) -> JSONResponse:

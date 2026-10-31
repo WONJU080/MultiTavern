@@ -50,6 +50,38 @@ def test_generated_codes_are_unique_and_formatted():
         assert CODE_PATTERN.fullmatch(code)
 
 
+def test_public_rooms_endpoint_lists_only_public_rooms():
+    """The landing-page endpoint exposes public rooms and never private ones."""
+    app = create_app(FakeResolver)
+    public_id, private_id = str(uuid4()), str(uuid4())
+    with TestClient(app) as client:
+        with (
+            client.websocket_connect(f"/ws/{public_id}") as public_host,
+            client.websocket_connect(f"/ws/{private_id}") as private_host,
+        ):
+            public_host.send_json(
+                {"event_type": "create_room", "data": {"name": "PublicHost", "public": True}}
+            )
+            private_host.send_json(
+                {"event_type": "create_room", "data": {"name": "PrivateHost", "public": False}}
+            )
+            public_code = receive_until(public_host, "auth_ok")["payload"]["invite_code"]
+            private_code = receive_until(private_host, "auth_ok")["payload"]["invite_code"]
+
+            response = client.get("/api/rooms/public")
+            assert response.status_code == 200
+            rooms = response.json()["rooms"]
+            codes = {room["invite_code"] for room in rooms}
+            assert public_code in codes
+            assert private_code not in codes
+            listed = next(room for room in rooms if room["invite_code"] == public_code)
+            assert listed["host"] == "PublicHost"
+            assert listed["players"] == 1
+            # The host has not configured a scenario yet, so the room is listed
+            # as a public lobby but the join button is disabled client-side.
+            assert listed["accepting_new"] is False
+
+
 def test_rooms_are_isolated_between_concurrent_games():
     """Chat and game state never leak across concurrent rooms."""
     app = create_app(FakeResolver)
