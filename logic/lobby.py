@@ -993,6 +993,8 @@ class LobbyMixin:
                     payload={
                         "title": self.scenario_title,
                         "characters": self._characters_payload(),
+                        "has_map": bool(self.regions),
+                        "has_codex": bool(self.items or self.timed_events),
                     },
                 ),
             )
