@@ -122,7 +122,7 @@ def model_names(status: int, detail: str) -> list[str]:
 
 
 async def check_server(config: PlaytestConfig, probe: Probe) -> CheckResult:
-    """Check that the Anyworld server answers its index page."""
+    """Check that the MultiTavern server answers its index page."""
     status, detail = await probe(
         f"{config.server.url}/", None, config.server.verify_tls, config.server.proxy
     )

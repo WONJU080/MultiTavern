@@ -46,7 +46,7 @@ def format_validation_error(error: ValidationError) -> str:
 
 
 class ServerTarget(ConfigModel):
-    """The running Anyworld server the seats connect to."""
+    """The running MultiTavern server the seats connect to."""
 
     url: str = "https://127.0.0.1:4141"
     verify_tls: bool = False

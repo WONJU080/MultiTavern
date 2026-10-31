@@ -24,7 +24,7 @@ python -m playtest run --config playtest/configs/example.yaml
 python -m playtest run --config playtest/configs/example.yaml --dry-run   # 座位脚本化，只花 DM 的 token
 ```
 
-安装包之后也可以直接用 `anyworld-playtest`（等价于 `python -m playtest`）。
+安装包之后也可以直接用 `multitavern-playtest`（等价于 `python -m playtest`）。
 
 ## 网页跑测台
 
@@ -44,7 +44,7 @@ Key 只保存在该进程内存中，不写盘；「记住 Key」勾选后才会
 
 见 [`configs/example.yaml`](configs/example.yaml)。要点：
 
-- `server.url`：运行中的 anyworld 地址；自签证书默认跳过校验（`verify_tls: false`）。
+- `server.url`：运行中的 multitavern 地址；自签证书默认跳过校验（`verify_tls: false`）。
 - `dm.mode`：`borrow` 借用服务器的 `llm.api_key`（受 `server.borrowed_room_limit` 限制），
   或 `own` 由房主自带 endpoint/key/model。
 - `seats.default` + `seats.overrides`：**每个角色一个座位**，可各自不同厂商/模型/温度；

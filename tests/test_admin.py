@@ -24,7 +24,7 @@ def test_admin_panel_requires_password_and_lists_and_closes_rooms():
             "/admin/login", data={"password": "secret-admin"}, follow_redirects=False
         )
         assert response.status_code == 303
-        client.cookies.set("anyworld_admin", response.cookies["anyworld_admin"])
+        client.cookies.set("multitavern_admin", response.cookies["multitavern_admin"])
         response = client.get("/admin/rooms")
         assert "运行中的房间" in response.text
         with client.websocket_connect(f"/ws/{host_id}") as host:
@@ -66,7 +66,7 @@ def test_admin_panel_links_to_room_transcripts():
         response = client.post(
             "/admin/login", data={"password": "secret-admin"}, follow_redirects=False
         )
-        client.cookies.set("anyworld_admin", response.cookies["anyworld_admin"])
+        client.cookies.set("multitavern_admin", response.cookies["multitavern_admin"])
         with client.websocket_connect(f"/ws/{host_id}") as host:
             create_room(host, host_id, "Host")
             code = receive_until(host, "auth_ok")["payload"]["invite_code"]
@@ -100,7 +100,7 @@ def test_admin_record_requires_password_and_reports_missing_rooms():
         login = client.post(
             "/admin/login", data={"password": "secret-admin"}, follow_redirects=False
         )
-        client.cookies.set("anyworld_admin", login.cookies["anyworld_admin"])
+        client.cookies.set("multitavern_admin", login.cookies["multitavern_admin"])
         response = client.get("/admin/rooms/ABC123/record")
         assert response.status_code == 404
         assert "没有剧情记录" in response.text

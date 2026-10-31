@@ -36,7 +36,7 @@ def _admin_cookie_valid(request: Request) -> bool:
     admin = settings.server.admin_password
     if admin is None:
         return True
-    token = request.cookies.get("anyworld_admin")
+    token = request.cookies.get("multitavern_admin")
     if not token:
         return False
     expected = hashlib.sha256(admin.encode("utf-8")).hexdigest()
@@ -139,7 +139,7 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
         if admin is None or hmac.compare_digest(supplied, admin):
             response = RedirectResponse("/admin/rooms", status_code=303)
             response.set_cookie(
-                "anyworld_admin",
+                "multitavern_admin",
                 hashlib.sha256((admin or "").encode("utf-8")).hexdigest(),
                 httponly=True,
             )
@@ -168,7 +168,7 @@ def create_app(resolver_factory=LLMContextManager) -> FastAPI:
         if path is None or not path.exists():
             return HTMLResponse(
                 "<!doctype html><html lang='zh'><head><meta charset='utf-8'>"
-                "<title>Anyworld 运维面板</title></head>"
+                "<title>MultiTavern 运维面板</title></head>"
                 "<body style='background:#0b1212;color:#e0e9e5;"
                 "font-family:system-ui,sans-serif;padding:3rem;text-align:center'>"
                 "该房间还没有剧情记录（游戏尚未开始或房间已关闭）。</body></html>",

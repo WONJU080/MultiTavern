@@ -10,7 +10,7 @@ from core.config import LLMConfig, ServerConfig, settings
 @pytest.fixture
 def tmp_path():
     """Remove each test's temporary files on teardown, even after a failure."""
-    with TemporaryDirectory(prefix="anyworld-test-") as directory:
+    with TemporaryDirectory(prefix="multitavern-test-") as directory:
         yield Path(directory)
 
 

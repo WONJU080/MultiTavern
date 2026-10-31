@@ -105,5 +105,5 @@ class Settings(BaseSettings):
 
 
 settings = Settings.load()
-if os.environ.get("ANYWORLD_DEBUG_RAW_RESPONSES") == "1":
+if os.environ.get("MULTITAVERN_DEBUG_RAW_RESPONSES") == "1":
     settings.llm.debug_raw_responses = True

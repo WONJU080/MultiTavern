@@ -61,8 +61,8 @@ def test_the_page_is_served(tmp_path: Path) -> None:
 def test_card_listing_reports_playability(tmp_path: Path) -> None:
     """The page lists playable and unplayable cards with their reason."""
     cards_dir, app = build_app(tmp_path)
-    write_card(cards_dir, round_card(), "good.anyworld.json")
-    (cards_dir / "preset.anyworld.json").write_text(
+    write_card(cards_dir, round_card(), "good.multitavern.json")
+    (cards_dir / "preset.multitavern.json").write_text(
         json.dumps({"prompt_blocks": []}), encoding="utf-8"
     )
 
@@ -70,11 +70,11 @@ def test_card_listing_reports_playability(tmp_path: Path) -> None:
         payload = client.get("/api/cards").json()
 
     cards = {Path(item["path"]).name: item for item in payload["cards"]}
-    assert cards["good.anyworld.json"]["ok"] is True
-    assert cards["good.anyworld.json"]["schedule"] == "round"
-    assert cards["good.anyworld.json"]["characters"] == ["甲", "乙"]
-    assert cards["preset.anyworld.json"]["ok"] is False
-    assert cards["preset.anyworld.json"]["errors"]
+    assert cards["good.multitavern.json"]["ok"] is True
+    assert cards["good.multitavern.json"]["schedule"] == "round"
+    assert cards["good.multitavern.json"]["characters"] == ["甲", "乙"]
+    assert cards["preset.multitavern.json"]["ok"] is False
+    assert cards["preset.multitavern.json"]["errors"]
 
 
 def test_check_endpoint_uses_the_injected_probe(tmp_path: Path) -> None:
@@ -135,7 +135,7 @@ def test_an_invalid_configuration_is_rejected(tmp_path: Path) -> None:
 def test_an_unplayable_card_cannot_start_a_run(tmp_path: Path) -> None:
     """The API refuses a card the server would reject."""
     cards_dir, app = build_app(tmp_path)
-    card = cards_dir / "preset.anyworld.json"
+    card = cards_dir / "preset.multitavern.json"
     card.write_text(json.dumps({"prompt_blocks": []}), encoding="utf-8")
 
     with TestClient(app) as client:
@@ -315,7 +315,7 @@ def test_a_stopped_run_writes_a_partial_report(tmp_path: Path) -> None:
 def test_a_card_without_characters_is_listed_as_unplayable(tmp_path: Path) -> None:
     """Cards missing their cast never appear as runnable."""
     cards_dir, app = build_app(tmp_path)
-    (cards_dir / "half.anyworld.json").write_text(
+    (cards_dir / "half.multitavern.json").write_text(
         json.dumps({"scenario": "只有一个剧本。"}, ensure_ascii=False), encoding="utf-8"
     )
 

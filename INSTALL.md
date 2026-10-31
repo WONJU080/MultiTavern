@@ -1,4 +1,4 @@
-# Install and configure Anyworld
+# Install and configure MultiTavern
 
 [Back to the game overview](README.md)
 
@@ -8,8 +8,8 @@
 Clone the repository and change into its directory:
 
 ```bash
-git clone https://github.com/iamarxs/AnyWorld.git
-cd AnyWorld
+git clone https://github.com/WONJU080/MultiTavern.git
+cd MultiTavern
 ```
 
 Python 3.11 or newer is required. Run the remaining commands from the repository root. On
@@ -110,7 +110,7 @@ Set `provider` to `compatible` for a local OpenAI-compatible backend (the defaul
 For direct OpenAI use, set `api_key` to your OpenAI API key and set `model_name` to the OpenAI
 model you want to use; `endpoint` is ignored. For local backends, `endpoint` must support
 OpenAI-compatible structured chat completion parsing.
-`context_window_size` is an optional fallback value. When using a compatible backend, Anyworld
+`context_window_size` is an optional fallback value. When using a compatible backend, MultiTavern
 still attempts to read the context size from the llama.cpp `/props` endpoint even when a value is
 configured. A successful discovery takes precedence; if discovery is unavailable, the configured
 value is used. The default fallback is a conservative 8,192 tokens. OpenAI does not currently
@@ -207,7 +207,7 @@ support exists but has not been tested live in this project. Run from the reposi
 ```bash
 python app.py
 # or, after installation:
-anyworld
+multitavern
 ```
 
 Open [https://127.0.0.1:4141/](https://127.0.0.1:4141/) on the server machine.
@@ -226,7 +226,7 @@ setup, not a minimum requirement or a guarantee of story quality. Smaller contex
 require more frequent summaries; memory checks cannot guarantee perfect recall.
 Sampling settings used during development were temperature 1.0, top-p 0.95, top-k 20,
 min-p 0.0, presence-penalty 0.0, and repeat-penalty 1.0. Configure these in the model server;
-Anyworld does not set them.
+MultiTavern does not set them.
 
 ### HTTPS certificates
 
@@ -249,7 +249,7 @@ been empty or abandoned for the configured timeouts. Rooms do not need a server 
 make room for a new game.
 
 Restart after configuration changes. CLI overrides are available as `--host` and `--port`, for
-example `anyworld --host 0.0.0.0 --port 4141`. Development reload is available with
+example `multitavern --host 0.0.0.0 --port 4141`. Development reload is available with
 `python app.py --reload`; code-triggered reloads also reset in-memory games.
 
 ## Quality checks
@@ -307,7 +307,7 @@ private checks are not broadcast to players.
 ### Raw model responses
 
 To investigate generated wording, launch with `python app.py --debug` or
-`anyworld --debug-raw-responses`. The flag also works with `--reload` and enables logging
+`multitavern --debug-raw-responses`. The flag also works with `--reload` and enables logging
 for that launch without changing `config.yaml`. Alternatively, set `debug_raw_responses: true`
 under `llm` in the configuration. Raw-response file logging is disabled by default. Restarting the application
 resets the current game. Each completion HTTP response is saved as a timestamped JSON file under
@@ -320,5 +320,5 @@ These files are private diagnostics: model output can include hidden dice or pri
 and error bodies can contain sensitive data. They are excluded from Git and are not served by
 the web app. Request prompts, headers, and credentials are not deliberately logged. Files are
 not automatically rotated; disable the option after diagnosis and remove unneeded logs.
-Sampling settings remain controlled by the backend; Anyworld does not override repetition or
+Sampling settings remain controlled by the backend; MultiTavern does not override repetition or
 presence penalties.

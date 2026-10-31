@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Anyworld 剧情卡跑测台</title>
+<title>MultiTavern 剧情卡跑测台</title>
 <style>
   :root {
     --bg: #0b1212; --panel: #121b1a; --panel-2: #172220; --border: #24352f;
@@ -64,14 +64,14 @@
 </head>
 <body>
 <header>
-  <h1>Anyworld 剧情卡跑测台</h1>
+  <h1>MultiTavern 剧情卡跑测台</h1>
   <p>填好服务器与座位 API，先「自检」，再「开始跑测」。API Key 只存在这个本地进程的内存里，不会写盘。</p>
 </header>
 <main>
   <div>
     <section>
       <h2>1 · 服务器与 DM</h2>
-      <label>服务器地址（运行中的 anyworld）</label>
+      <label>服务器地址（运行中的 multitavern）</label>
       <input id="serverUrl" placeholder="https://127.0.0.1:4141">
       <div class="inline" style="margin-top:6px">
         <input type="checkbox" id="verifyTls"> <span class="muted">校验 TLS 证书（自签证书请留空不勾）</span>
@@ -176,7 +176,7 @@
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
-const STORE = "anyworld-playtest-ui";
+const STORE = "multitavern-playtest-ui";
 let cards = [];
 let currentRun = null;
 let pollTimer = null;
@@ -243,7 +243,7 @@ async function loadCards() {
   cards = payload.cards || [];
   const box = $("cards");
   if (!cards.length) {
-    box.innerHTML = '<div class="muted">没有找到卡牌。用 <code>--cards 目录</code> 指定包含 *.anyworld.json 的目录。</div>';
+    box.innerHTML = '<div class="muted">没有找到卡牌。用 <code>--cards 目录</code> 指定包含 *.multitavern.json 的目录。</div>';
     return;
   }
   box.innerHTML = cards.map((card) => {

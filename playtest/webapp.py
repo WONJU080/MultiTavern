@@ -119,7 +119,7 @@ def create_playtest_app(
     probe: Probe | None = None,
 ) -> FastAPI:
     """Build the local playtest UI and its JSON API."""
-    application = FastAPI(title="Anyworld playtest")
+    application = FastAPI(title="MultiTavern playtest")
     runs: dict[str, RunState] = {}
     order: list[str] = []
 
@@ -129,7 +129,7 @@ def create_playtest_app(
         for directory in cards_dirs:
             base = Path(directory)
             if base.is_dir():
-                found.extend(sorted(base.glob("*.anyworld.json")))
+                found.extend(sorted(base.glob("*.multitavern.json")))
             elif base.is_file():
                 found.append(base)
         return found

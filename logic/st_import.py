@@ -1,8 +1,8 @@
-"""Convert SillyTavern presets, character cards and world info into Anyworld
+"""Convert SillyTavern presets, character cards and world info into MultiTavern
 import configs.
 
 This is a deterministic field mapper rather than a rewriting step: fields that
-have a direct Anyworld equivalent are copied (and lightly sanitised), while
+have a direct MultiTavern equivalent are copied (and lightly sanitised), while
 everything that depends on SillyTavern-only machinery — tavern_helper scripts,
 regex scripts, EJS templates, the MVU variable store, macros, extra client
 settings — is reported through ``warnings`` instead of being silently dropped.

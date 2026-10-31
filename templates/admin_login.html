@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Anyworld 运维面板</title>
+  <title>MultiTavern 运维面板</title>
   <style>
     * { box-sizing: border-box; }
     :root { color-scheme: dark; --bg: #0b1212; --panel: #141f20; --text: #e0e9e5;
@@ -23,7 +23,7 @@
 </head>
 <body>
   <div class="card">
-    <h1>Anyworld 运维面板</h1>
+    <h1>MultiTavern 运维面板</h1>
     <p style="color:var(--muted)">请输入 admin 密码登录运维面板。</p>
     {% if error %}<p class="error">{{ error }}</p>{% endif %}
     <form method="post" action="/admin/login">

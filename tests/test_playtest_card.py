@@ -53,7 +53,7 @@ def strict_card(**overrides: Any) -> dict[str, Any]:
     return payload
 
 
-def write_card(tmp_path: Path, payload: Any, name: str = "card.anyworld.json") -> Path:
+def write_card(tmp_path: Path, payload: Any, name: str = "card.multitavern.json") -> Path:
     """Write a card file into the test's temporary directory."""
     path = tmp_path / name
     if isinstance(payload, str):
@@ -343,16 +343,16 @@ def test_thin_characters_and_missing_guidance_are_noted(tmp_path: Path) -> None:
 
 def test_unreadable_files_are_reported_as_errors(tmp_path: Path) -> None:
     """Broken JSON and a missing file are errors, not exceptions."""
-    broken = inspect_card(write_card(tmp_path, "{not json", "broken.anyworld.json"))
+    broken = inspect_card(write_card(tmp_path, "{not json", "broken.multitavern.json"))
     assert broken.ok is False
     assert codes(broken) == {"unreadable"}
     assert broken.digest == ""
 
-    missing = inspect_card(tmp_path / "absent.anyworld.json")
+    missing = inspect_card(tmp_path / "absent.multitavern.json")
     assert missing.ok is False
     assert "无法读取" in missing.errors[0].message
 
-    non_object = inspect_card(write_card(tmp_path, [1, 2, 3], "list.anyworld.json"))
+    non_object = inspect_card(write_card(tmp_path, [1, 2, 3], "list.multitavern.json"))
     assert non_object.ok is False
     assert "顶层必须是 JSON 对象" in non_object.errors[0].message
 
@@ -370,14 +370,14 @@ def test_digest_is_content_addressed(tmp_path: Path) -> None:
 
 def test_discover_cards_lists_only_cards(tmp_path: Path) -> None:
     """Directory scanning picks up cards and ignores everything else."""
-    write_card(tmp_path, strict_card(), "a.anyworld.json")
-    write_card(tmp_path, strict_card(), "b.anyworld.json")
+    write_card(tmp_path, strict_card(), "a.multitavern.json")
+    write_card(tmp_path, strict_card(), "b.multitavern.json")
     (tmp_path / "notes.md").write_text("not a card", encoding="utf-8")
     (tmp_path / "nested").mkdir()
 
     found = [path.name for path in discover_cards(tmp_path)]
 
-    assert found == ["a.anyworld.json", "b.anyworld.json"]
+    assert found == ["a.multitavern.json", "b.multitavern.json"]
     with pytest.raises(CardFileError):
         discover_cards(tmp_path / "absent")
 
@@ -414,7 +414,7 @@ def test_card_shapes_are_classified(
         payload = {key: value for key, value in strict_card().items() if key not in world_keys}
     else:
         payload = strict_card()
-    path = tmp_path / f"{kind}.anyworld.json"
+    path = tmp_path / f"{kind}.multitavern.json"
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
     report = inspect_card(path)

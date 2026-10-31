@@ -1,5 +1,5 @@
 [project]
-name = "anyworld"
+name = "multitavern"
 version = "0.2.0"
 description = "An asynchronous, WebSocket-based multiplayer text RPG orchestrated by an LLM."
 readme = "README.md"
@@ -23,8 +23,8 @@ dev = ["black>=24.0", "flake8>=7.0", "httpx>=0.27", "pytest>=8.0"]
 playtest = ["websockets>=12.0"]
 
 [project.scripts]
-anyworld = "app:main"
-anyworld-playtest = "playtest.cli:main"
+multitavern = "app:main"
+multitavern-playtest = "playtest.cli:main"
 
 [build-system]
 requires = ["hatchling"]

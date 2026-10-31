@@ -1,4 +1,4 @@
-"""Command-line entry point for Anyworld."""
+"""Command-line entry point for MultiTavern."""
 
 import argparse
 import logging
@@ -42,7 +42,7 @@ def main() -> None:
     if args.debug_raw_responses:
         settings.llm.debug_raw_responses = True
         # Uvicorn reload starts a fresh interpreter; carry the launch override there too.
-        os.environ["ANYWORLD_DEBUG_RAW_RESPONSES"] = "1"
+        os.environ["MULTITAVERN_DEBUG_RAW_RESPONSES"] = "1"
 
     logging.basicConfig(
         level=logging.INFO,
@@ -53,7 +53,7 @@ def main() -> None:
         target_logger.setLevel(logging.INFO)
         target_logger.addFilter(quiet_filter)
     ip, cert_path, key_path = ensure_cert()
-    logging.info("Launching Anyworld on %s:%s (https://%s:%s)", args.host, args.port, ip, args.port)
+    logging.info("Launching MultiTavern on %s:%s (https://%s:%s)", args.host, args.port, ip, args.port)
     uvicorn.run(
         "api.server:app",
         host=args.host,

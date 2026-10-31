@@ -21,4 +21,7 @@ benchmarks/
 playtest-runs/
 
 # 剧情卡与预设：属于内容而非代码，默认不入库（需要时用 git add -f 显式添加）
-examples/*.anyworld.json
+examples/*.json
+
+# 演示视频工程：录屏、配音、密钥，一律不入库
+demo/

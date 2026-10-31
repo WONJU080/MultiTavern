@@ -8,7 +8,7 @@
   <script>
     // Apply the saved theme before first paint to avoid a flash.
     try {
-      var savedTheme = localStorage.getItem("anyworld-theme");
+      var savedTheme = localStorage.getItem("multitavern-theme");
       document.documentElement.dataset.theme = savedTheme === "vellum" ? "vellum" : "lamp";
     } catch (error) {
       document.documentElement.dataset.theme = "lamp";
@@ -118,7 +118,7 @@
     <div id="content-resizer" class="resize-handle resize-v" role="separator" aria-orientation="vertical" aria-label="调整剧情宽度" title="拖动调整剧情与行动栏宽度"></div>
 
     <section id="log-pane" aria-label="游戏状态：剧情与玩家行动" aria-live="polite">
-      <img id="game-banner" src="/static/media/AnyworldBanner.jpg" alt="" width="1376" height="322"
+      <img id="game-banner" src="/static/media/MultiTavernBanner.jpg" alt="" width="1376" height="322"
         fetchpriority="high" hidden>
     </section>
 
@@ -656,7 +656,7 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=s5a-41"></script>
+  <script src="/static/js/app.js?v=s5a-42"></script>
 </body>
 
 </html>

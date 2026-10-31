@@ -1,7 +1,7 @@
 """Command-line entry point for the playtest driver.
 
 ``validate`` checks a card offline with the server's own validation plus static
-design checks. ``run`` drives a real game against a running Anyworld server:
+design checks. ``run`` drives a real game against a running MultiTavern server:
 one host client plus one AI seat per character, then writes a run report.
 """
 
@@ -50,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     validate.add_argument("--card", action="append", default=[], help="剧情卡 JSON 路径，可重复")
     validate.add_argument(
-        "--cards", action="append", default=[], help="包含 *.anyworld.json 的目录，可重复"
+        "--cards", action="append", default=[], help="包含 *.multitavern.json 的目录，可重复"
     )
     validate.add_argument("--config", help="跑测配置 YAML；给出时会一并交叉检查座位配置")
     validate.add_argument("--json", action="store_true", help="以 JSON 输出，便于脚本化")
@@ -475,7 +475,7 @@ def _serve(args: argparse.Namespace) -> int:
 
     cards = args.cards or ["examples"]
     url = f"http://{args.host}:{args.port}/"
-    print("Anyworld 跑测台已启动：")
+    print("MultiTavern 跑测台已启动：")
     print(f"  地址：{url}")
     print(f"  卡牌目录：{', '.join(cards)}")
     print("  提示：API Key 只存在这个进程内存里；按 Ctrl+C 结束。")

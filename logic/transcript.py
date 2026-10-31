@@ -46,7 +46,7 @@ class GameTranscript:
         )
         document = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>{escape(title)} — Anyworld</title><style>
+<title>{escape(title)} — MultiTavern</title><style>
 *{{box-sizing:border-box}}
 :root{{color-scheme:dark;--background:#0b1212;--panel:#141f20;--text:#e0e9e5;
 --muted:#9aaca8;--border:rgb(216 224 231 / 10%);--accent:#7bc9ab;--action-accent:#ddb780}}
@@ -71,7 +71,7 @@ dl dt:nth-of-type(8n+1){{color:#79c0ff}}dl dt:nth-of-type(8n+2){{color:#ffa657}}
 dl dt:nth-of-type(8n+3){{color:#56d364}}dl dt:nth-of-type(8n+4){{color:#ff7b72}}
 dl dt:nth-of-type(8n+5){{color:#d2a8ff}}dl dt:nth-of-type(8n+6){{color:#f2cc60}}
 dl dt:nth-of-type(8n+7){{color:#a5d6ff}}dl dt:nth-of-type(8n){{color:#ff9bce}}
-</style></head><body><header><h1>Anyworld - {escape(title)}</h1>
+</style></head><body><header><h1>MultiTavern - {escape(title)}</h1>
 {scenario_html}{guidance_html}<h2>Opening scenario</h2>
 <p class="state">{escape(initial_state)}</p></header><main>
 """

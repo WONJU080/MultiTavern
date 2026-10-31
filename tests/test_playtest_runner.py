@@ -130,7 +130,7 @@ def round_card(**overrides: Any) -> dict[str, Any]:
     return payload
 
 
-def write_card(tmp_path: Path, payload: Any, name: str = "card.anyworld.json") -> Path:
+def write_card(tmp_path: Path, payload: Any, name: str = "card.multitavern.json") -> Path:
     """Write a card file into the test's temporary directory."""
     path = tmp_path / name
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")

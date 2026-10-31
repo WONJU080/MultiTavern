@@ -82,7 +82,7 @@ def websocket_url(base_url: str, client_id: str) -> str:
 def build_ssl_context(verify_tls: bool) -> ssl.SSLContext:
     """Return a client TLS context, skipping verification when asked.
 
-    An Anyworld server uses a self-signed certificate by default, so a fresh
+    An MultiTavern server uses a self-signed certificate by default, so a fresh
     checkout cannot connect without this.
     """
     context = ssl.create_default_context()
@@ -93,7 +93,7 @@ def build_ssl_context(verify_tls: bool) -> ssl.SSLContext:
 
 
 class WebSocketTransport:
-    """A ``websockets`` client connection to the Anyworld gateway."""
+    """A ``websockets`` client connection to the MultiTavern gateway."""
 
     def __init__(
         self,

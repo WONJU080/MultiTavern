@@ -1,9 +1,9 @@
-# Anyworld 剧情卡跑测配置
+# MultiTavern 剧情卡跑测配置
 # M1：供 `python -m playtest validate --config playtest/configs/example.yaml` 交叉检查。
 # run 子命令（真实多座位试玩）在 M2 接入，字段先按最终形态固定下来。
 
 server:
-  url: "https://127.0.0.1:4141" # 运行中的 anyworld 服务器
+  url: "https://127.0.0.1:4141" # 运行中的 multitavern 服务器
   verify_tls: false # 自签证书默认跳过校验
   proxy: false # 是否经系统/环境代理连接；默认直连（本机地址始终直连）
 
@@ -17,7 +17,7 @@ dm:
   # provider: compatible            # compatible | openai
   # model_name: deepseek-chat
 
-card: "examples/your-card.anyworld.json" # 换成你自己的剧情卡（也可用 --cards 指定目录批量体检）
+card: "examples/your-card.multitavern.json" # 换成你自己的剧情卡（也可用 --cards 指定目录批量体检）
 
 seats:
   # 所有座位的默认 LLM；每个角色一个座位，可各自不同厂商/模型/温度

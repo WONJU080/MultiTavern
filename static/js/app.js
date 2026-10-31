@@ -26,7 +26,7 @@ function readStoredObject(storageName, key) {
     }
 }
 
-const storedId = readStored("sessionStorage", "artificialDungeonClientId");
+const storedId = readStored("sessionStorage", "multitavernClientId");
 
 // crypto.randomUUID() is unavailable on non-secure HTTP origins except localhost.
 // Use a standards-compatible fallback so remote HTTP clients do not fail before
@@ -52,11 +52,11 @@ function createClientId() {
 }
 
 let clientId = storedId || createClientId();
-let savedAuth = readStoredObject("sessionStorage", "artificialDungeonAuth");
-writeStored("sessionStorage", "artificialDungeonClientId", clientId);
+let savedAuth = readStoredObject("sessionStorage", "multitavernAuth");
+writeStored("sessionStorage", "multitavernClientId", clientId);
 
 function identityKey(name) {
-    return `artificialDungeonIdentity:${name.trim().toLowerCase()}`;
+    return `multitavernIdentity:${name.trim().toLowerCase()}`;
 }
 
 function roomIdentityKey(name, inviteCode) {
@@ -66,7 +66,7 @@ function roomIdentityKey(name, inviteCode) {
 
 function rememberAuth(auth) {
     savedAuth = auth;
-    writeStored("sessionStorage", "artificialDungeonAuth", JSON.stringify(auth));
+    writeStored("sessionStorage", "multitavernAuth", JSON.stringify(auth));
 }
 
 function validIdentity(identity) {
@@ -1539,7 +1539,7 @@ function roomWasClosed(message) {
     roomClosed = true;
     roomState = null;
     savedAuth = null;
-    writeStored("sessionStorage", "artificialDungeonAuth", null);
+    writeStored("sessionStorage", "multitavernAuth", null);
     elements.grid.hidden = true;
     elements.chatInput.disabled = true;
     elements.actionInput.disabled = true;
@@ -1574,7 +1574,7 @@ function wasRemoved(message) {
     isHost = false;
     roomState = null;
     savedAuth = null;
-    writeStored("sessionStorage", "artificialDungeonAuth", null);
+    writeStored("sessionStorage", "multitavernAuth", null);
     elements.grid.hidden = true;
     elements.chatInput.disabled = true;
     elements.actionInput.disabled = true;
@@ -1617,7 +1617,7 @@ function leaveRoom() {
     amSpectator = false;
     roomState = null;
     savedAuth = null;
-    writeStored("sessionStorage", "artificialDungeonAuth", null);
+    writeStored("sessionStorage", "multitavernAuth", null);
     for (const child of [...elements.log.children]) {
         if (child.id !== "game-banner") {
             child.remove();
@@ -1697,7 +1697,7 @@ function rememberOwnCharacter(payload) {
     const next = mine ? mine.name : null;
     if (savedAuth.character !== next) {
         savedAuth.character = next;
-        writeStored("sessionStorage", "artificialDungeonAuth", JSON.stringify(savedAuth));
+        writeStored("sessionStorage", "multitavernAuth", JSON.stringify(savedAuth));
     }
 }
 
@@ -2748,7 +2748,7 @@ async function submitCreate(event) {
         leftRoom = false;
         if (targetId !== clientId || ws.readyState !== WebSocket.OPEN) {
             clientId = targetId;
-            writeStored("sessionStorage", "artificialDungeonClientId", clientId);
+            writeStored("sessionStorage", "multitavernClientId", clientId);
             pendingCreateAuth = auth;
             connectSocket();
         } else {
@@ -3371,7 +3371,7 @@ function chooseCharacter(character) {
     roomClosed = false;
     if (targetId !== clientId || ws.readyState !== WebSocket.OPEN) {
         clientId = targetId;
-        writeStored("sessionStorage", "artificialDungeonClientId", clientId);
+        writeStored("sessionStorage", "multitavernClientId", clientId);
         connectSocket();
     } else {
         send("join_room", auth);
@@ -4497,7 +4497,7 @@ function setTheme(theme) {
     const next = theme === "vellum" ? "vellum" : "lamp";
     document.documentElement.dataset.theme = next;
     try {
-        localStorage.setItem("anyworld-theme", next);
+        localStorage.setItem("multitavern-theme", next);
     } catch (error) {
         /* Storage can be unavailable; the theme still applies for this session. */
     }

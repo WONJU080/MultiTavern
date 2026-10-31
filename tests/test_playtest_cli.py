@@ -11,7 +11,7 @@ from playtest.cli import EXIT_INVALID, EXIT_OK, EXIT_USAGE, EXIT_WARNINGS, main
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def good_card(tmp_path: Path, name: str = "card.anyworld.json") -> Path:
+def good_card(tmp_path: Path, name: str = "card.multitavern.json") -> Path:
     """Write a card that passes every check."""
     payload: dict[str, Any] = {
         "scenario": "【剧本：好卡】\n\n一间上锁的门。",
@@ -26,7 +26,7 @@ def good_card(tmp_path: Path, name: str = "card.anyworld.json") -> Path:
     return path
 
 
-def warned_card(tmp_path: Path, name: str = "warned.anyworld.json") -> Path:
+def warned_card(tmp_path: Path, name: str = "warned.multitavern.json") -> Path:
     """Write a card the server accepts but that has a design warning."""
     payload: dict[str, Any] = {
         "scenario": "【剧本：警告卡】\n\n一间上锁的门。",
@@ -65,7 +65,7 @@ def test_a_valid_card_exits_zero(tmp_path: Path, capsys: pytest.CaptureFixture[s
 
 def test_an_invalid_card_exits_one(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """A card the server would reject exits 1."""
-    path = tmp_path / "preset.anyworld.json"
+    path = tmp_path / "preset.multitavern.json"
     path.write_text(json.dumps({"prompt_blocks": []}), encoding="utf-8")
 
     code = main(["validate", "--card", str(path)])
@@ -149,7 +149,7 @@ def test_config_cross_check_reports_seat_problems(
     card = good_card(tmp_path)
     config = write_config(
         tmp_path,
-        'card: "card.anyworld.json"\n'
+        'card: "card.multitavern.json"\n'
         "seats:\n"
         "  default:\n"
         "    style: rotate\n"
@@ -198,16 +198,16 @@ def test_dry_run_skips_seat_completeness(
 
 
 def test_the_console_script_targets_resolve() -> None:
-    """pyproject ships `anyworld-playtest`; the documented targets must exist."""
+    """pyproject ships `multitavern-playtest`; the documented targets must exist."""
     import importlib
     import tomllib
 
     project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     scripts = project["project"]["scripts"]
-    assert scripts["anyworld-playtest"] == "playtest.cli:main"
+    assert scripts["multitavern-playtest"] == "playtest.cli:main"
     assert "playtest" in project["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"]
 
-    module_name, _, attribute = scripts["anyworld-playtest"].partition(":")
+    module_name, _, attribute = scripts["multitavern-playtest"].partition(":")
     target = getattr(importlib.import_module(module_name), attribute)
     assert callable(target)
 

@@ -32,7 +32,7 @@ from logic.lobby import (
 )
 from logic.plugins import parse_plugins, truths_config
 
-CARD_SUFFIX = ".anyworld.json"
+CARD_SUFFIX = ".multitavern.json"
 MINUTES_PER_DAY = 1440
 
 # Every key the server reads from scenario_init; anything else is a typo.

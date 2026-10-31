@@ -149,7 +149,7 @@ test("a reopened tab recovers its identity after name, invite code and character
     pending.receive("error", { msg: "Old socket error" });
     assert.equal(next.node("connection-status").textContent, "Connected");
     assert.equal(next.node("login-modal").hidden, true);
-    const record = JSON.parse(first.localStorage.getItem("artificialDungeonIdentity:arxs"));
+    const record = JSON.parse(first.localStorage.getItem("multitavernIdentity:arxs"));
     assert.deepEqual(Object.keys(record).sort(), ["clientId", "reconnectToken"]);
 });
 
@@ -175,8 +175,8 @@ test("different players in new tabs keep separate identities and characters", as
     assert.equal(other.sockets[0].sent[1].data.reconnect_token, undefined);
     assert.notEqual(other.sockets[0].url, first.sockets[0].url);
     other.accept(other.sockets[0], "Other", "other-token");
-    assert.notEqual(first.localStorage.getItem("artificialDungeonIdentity:arxs"),
-        first.localStorage.getItem("artificialDungeonIdentity:other"));
+    assert.notEqual(first.localStorage.getItem("multitavernIdentity:arxs"),
+        first.localStorage.getItem("multitavernIdentity:other"));
 });
 
 test("claimed characters are disabled in the picker", async () => {
@@ -215,9 +215,9 @@ test("room creation sends the host's own API key and never persists it", async (
     assert.deepEqual(socket.sent[0].data.llm, { mode: "own", api_key: "sk-host-secret" });
     assert.equal(socket.sent[0].data.admin_password_digest, undefined);
     const stored = [
-        tab.sessionStorage.getItem("artificialDungeonAuth"),
-        tab.sessionStorage.getItem("artificialDungeonClientId"),
-        tab.localStorage.getItem("artificialDungeonIdentity:host"),
+        tab.sessionStorage.getItem("multitavernAuth"),
+        tab.sessionStorage.getItem("multitavernClientId"),
+        tab.localStorage.getItem("multitavernIdentity:host"),
     ].join(" ");
     assert.ok(!stored.includes("sk-host-secret"), "the key must never be persisted");
 });
@@ -300,8 +300,8 @@ test("blocked storage still permits login and in-memory socket recovery", async 
 test("corrupt stored JSON does not prevent a fresh login", async () => {
     const local = storage();
     const session = storage();
-    local.setItem("artificialDungeonIdentity:arxs", "not JSON");
-    session.setItem("artificialDungeonAuth", "not JSON");
+    local.setItem("multitavernIdentity:arxs", "not JSON");
+    session.setItem("multitavernAuth", "not JSON");
     const tab = await joined(local, session);
     assert.equal(tab.node("login-modal").hidden, true);
 });
@@ -419,7 +419,7 @@ test("reconnect tokens are remembered per room", async () => {
     const tab = await joined();
     const clientId = tab.sockets[0].url.split("/").at(-1);
     const record = JSON.stringify({ clientId, reconnectToken: "private-token" });
-    assert.equal(tab.localStorage.getItem("artificialDungeonIdentity:arxs:ABC123"), record);
+    assert.equal(tab.localStorage.getItem("multitavernIdentity:arxs:ABC123"), record);
     assert.equal(tab.runtime.rememberedIdentity("arxs", "ABC-123").reconnectToken, "private-token");
     assert.equal(tab.runtime.rememberedIdentity("arxs", "ABC-123").clientId, clientId);
     assert.equal(tab.runtime.rememberedIdentity("arxs", "ZZZ-999").reconnectToken, "private-token");
@@ -442,7 +442,7 @@ test("a host who learns their claimed character reconnects with it", async () =>
         title: "夜案",
         characters: [{ name: "金元珠", description: "", claimed_by: "Arxs", connected: true }],
     });
-    const saved = JSON.parse(tab.sessionStorage.getItem("artificialDungeonAuth"));
+    const saved = JSON.parse(tab.sessionStorage.getItem("multitavernAuth"));
     assert.equal(saved.character, "金元珠");
 
     tab.sockets[0].close();
