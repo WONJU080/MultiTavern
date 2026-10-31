@@ -1,5 +1,3 @@
-演示视频：https://www.bilibili.com/video/BV1bmsQ6bEPq
-
 # MultiTavern · 多人酒馆
 
 > **把 SillyTavern 的角色卡和预设，变成一场可以和朋友一起玩的多人跑团。**
@@ -10,16 +8,14 @@
 [![Based on AnyWorld](https://img.shields.io/badge/based%20on-AnyWorld-8b5cf6)](https://github.com/iamarxs/AnyWorld)
 [![Tests](https://img.shields.io/badge/tests-offline%20suite%20%28pytest%29-3fb950)](tests)
 [![Playtest](https://img.shields.io/badge/AI%20seats-card%20playtest-58a6ff)](playtest/README.md)
-
-![演示：用 AI 座位自动跑一遍剧情卡](docs/demo.gif)
-
-<sub>上面是**真实终端输出**（`python -m playtest run`）：每个角色一个 AI 座位，接入真实服务器，把一张剧情卡从头跑到尾，最后给出覆盖度与健康检查。</sub>
+[![Demo](https://img.shields.io/badge/演示视频-Bilibili-fb7299)](https://www.bilibili.com/video/BV1bmsQ6bEPq)
 
 ---
 
 ## 目录
 
 - [这是什么](#这是什么)
+- [界面预览](#界面预览)
 - [为什么值得一玩](#为什么值得一玩)
 - [5 分钟跑起来](#5-分钟跑起来)
 - [一局是怎么进行的](#一局是怎么进行的)
@@ -49,6 +45,29 @@ MultiTavern 是一个**自托管的多人 AI 跑团服务器**：
 | 轮流发言，互不影响 | 同一回合同时行动，AI 统一裁定谁先谁后、谁撞上谁 |
 | 剧情由你一个人推动 | 别人会撒谎、会拆穿你、会在你行动到一半时插手 |
 | 卡住了只能自己想办法 | 打不下去时还能让 AI 座位替你跑一遍，看卡到底哪里有问题 |
+
+---
+
+## 界面预览
+
+<p align="center">
+  <img src="docs/screenshots/play.png" alt="MultiTavern 实际游玩界面" width="100%">
+</p>
+
+<p align="center"><sub>实际游玩界面：左侧队伍聊天，上方剧情与行动记录，底部行动输入；地图、图鉴、真相在输入栏上方。</sub></p>
+
+<p align="center">
+  <img src="docs/screenshots/map.png" alt="固定视角的 3D 地图" width="100%">
+</p>
+
+<p align="center"><sub>固定视角地图：圆环是地区，浅黄色表示该地区有道具，灰色表示没有；彩色几何体是角色，连线表示可通行路线。</sub></p>
+
+<p align="center">
+  <img src="docs/screenshots/home.png" alt="MultiTavern 首页" width="49%">
+  <img src="docs/screenshots/rooms.png" alt="公开房间列表" width="49%">
+</p>
+
+<p align="center"><sub>首页 · 公开房间</sub></p>
 
 ---
 
@@ -136,6 +155,11 @@ sequenceDiagram
 ## 剧情卡跑测器：让 AI 座位替你把卡跑一遍
 
 这是本仓库相对上游最实用的新增：**用 AI 玩家自动把一张剧情卡玩完**，检查它到底能不能玩。
+
+
+![演示：用 AI 座位自动跑一遍剧情卡](docs/demo.gif)
+
+<sub>上面是**真实终端输出**（`python -m playtest run`）：每个角色一个 AI 座位，接入真实服务器，把一张剧情卡从头跑到尾，最后给出覆盖度与健康检查。</sub>
 
 ```bash
 python -m playtest validate --cards examples                    # ① 离线体检：不联网、不花 token
